@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centrum Monitoringu Seniorów</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        :root {
+            --bg-base: #f0f4f8; --blob-1: #a8e6cf; --blob-2: #bae1ff; --blob-3: #dcf2e8;
+            --glass-bg: rgba(255, 255, 255, 0.15); --glass-border-top: rgba(255, 255, 255, 0.8); --glass-border-right: rgba(255, 255, 255, 0.2);
+            --text-main: #1d1d1f; --text-muted: #6e6e73; --card-shadow: 0 15px 35px rgba(0, 0, 0, 0.03);
+            --color-ok: #34c759; --color-warning: #ff9500; --color-danger: #ff3b30; --color-critical: #cc00ff;
+        }
+
+        [data-theme="dark"] {
+            --bg-base: #0a0f14; --blob-1: #0f382b; --blob-2: #122a40; --blob-3: #1a1a24;
+            --glass-bg: rgba(255, 255, 255, 0.03); --glass-border-top: rgba(255, 255, 255, 0.15); --glass-border-right: rgba(255, 255, 255, 0.02);
+            --text-main: #f5f5f7; --text-muted: #a1a1a6; --card-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+        }
+
+        * { box-sizing: border-box; transition: background-color 0.5s, color 0.5s; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-base); color: var(--text-main);
+            margin: 0; padding: 20px; min-height: 100vh; position: relative; overflow-x: hidden;
+            /* Dodana tranzycja dla płynnego przesuwania całej strony */
+            transition: padding-right 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+        }
+
+        /* Gdy panel jest otwarty, robimy mu miejsce z prawej strony */
+        body.panel-open {
+            padding-right: 420px;
+        }
+
+        .ambient-bg { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; background: var(--bg-base); }
+        .blob { position: absolute; border-radius: 50%; filter: blur(150px); opacity: 0.65; animation: float 25s infinite alternate ease-in-out; }
+        .blob-1 { width: 60vw; height: 60vh; background: var(--blob-1); top: -10vh; left: -10vw; }
+        .blob-2 { width: 70vw; height: 70vh; background: var(--blob-2); bottom: -20vh; right: -10vw; animation-delay: -5s; }
+        .blob-3 { width: 50vw; height: 50vh; background: var(--blob-3); top: 30vh; left: 25vw; animation-delay: -10s; }
+        @keyframes float { 0% { transform: translate(0, 0) scale(1); } 100% { transform: translate(3vw, 3vh) scale(1.1); } }
+
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; z-index: 10; position: relative; }
+        h1 { margin: 0; font-weight: 700; letter-spacing: -0.5px; font-size: 2rem; }
+        
+        .top-controls { display: flex; align-items: center; gap: 20px; }
+        .theme-switch-wrapper { display: flex; align-items: center; gap: 10px; font-weight: 500; }
+        .switch { position: relative; display: inline-block; width: 50px; height: 28px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.15); border-radius: 34px; border: 1px solid var(--glass-border-right); backdrop-filter: blur(5px); }
+        .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: white; border-radius: 50%; transition: .4s;}
+        input:checked + .slider { background-color: rgba(0, 122, 255, 0.6); }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        #toggle-terminal {
+            background: var(--glass-bg); color: var(--text-main); border: 1px solid var(--glass-border-top);
+            padding: 8px 16px; border-radius: 12px; cursor: pointer; font-family: monospace; font-weight: bold;
+            backdrop-filter: blur(10px);
+        }
+        #toggle-terminal:hover { background: rgba(0, 122, 255, 0.2); }
+
+        .main-container {
+            display: flex; flex-direction: column; gap: 30px; z-index: 10; position: relative; max-width: 1400px; margin: 0 auto;
+        }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+
+        .card {
+            background: var(--glass-bg); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border-top: 1px solid var(--glass-border-top); border-left: 1px solid var(--glass-border-top);
+            border-right: 1px solid var(--glass-border-right); border-bottom: 1px solid var(--glass-border-right);
+            border-radius: 20px; padding: 25px; box-shadow: var(--card-shadow);
+        }
+
+        .chart-section { width: 100%; height: 40vh; min-height: 300px; padding: 15px; }
+        canvas { width: 100% !important; height: 100% !important; }
+
+        .card.alarm-upadek { border: 2px solid var(--color-danger); background: rgba(255, 59, 48, 0.1); animation: pulse-danger 0.8s infinite alternate; }
+        .card.alarm-pozar { border: 2px solid var(--color-critical); background: rgba(204, 0, 255, 0.1); animation: pulse-critical 0.6s infinite alternate; }
+        .card.alarm-bezdech { border: 2px solid var(--color-warning); background: rgba(255, 149, 0, 0.1); animation: pulse-warning 1s infinite alternate; }
+
+        @keyframes pulse-danger { to { box-shadow: 0 0 30px rgba(255, 59, 48, 0.5); transform: scale(1.02); } }
+        @keyframes pulse-critical { to { box-shadow: 0 0 40px rgba(204, 0, 255, 0.8); transform: scale(1.03); } }
+        @keyframes pulse-warning { to { box-shadow: 0 0 20px rgba(255, 149, 0, 0.5); transform: scale(1.01); } }
+
+        .room-number { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; }
+        .patient-name { font-size: 24px; font-weight: 700; margin-bottom: 15px; display: inline-block; padding: 2px 8px; border-radius: 8px; cursor: text; border: 1px dashed transparent; margin-left: -8px;}
+        .patient-name:focus { outline: none; border-color: var(--glass-border-top); background: var(--glass-bg); }
+        .status-badge { display: inline-block; padding: 5px 12px; border-radius: 30px; font-size: 11px; font-weight: 800; color: white; background-color: var(--color-ok); margin-bottom: 20px; }
+        
+        .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .metric-group { display: flex; flex-direction: column; }
+        .metric-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+        .metric-value { font-size: 20px; font-weight: 600; }
+
+        /* === ZMIENIONY WYSUWANY PANEL DEBUGOWANIA === */
+        .log-panel {
+            position: fixed; top: 0; right: -400px; /* Ukryty domyślnie */
+            width: 400px; height: 100vh; z-index: 1000;
+            background: rgba(0, 0, 0, 0.5); /* Bardziej przezroczyste */
+            backdrop-filter: blur(10px); /* Lżejszy blur */
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px; color: #00ff00; font-family: 'Courier New', Courier, monospace; font-size: 12px;
+            display: flex; flex-direction: column; transition: right 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+        }
+        .log-panel.open { right: 0; } 
+        
+        .log-panel h3 { color: white; margin-top: 0; font-family: sans-serif; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between;}
+        #close-terminal { cursor: pointer; color: #ff4444; font-weight: bold; font-size: 16px; }
+        
+        #logs { flex-grow: 1; overflow-y: auto; padding-right: 10px; }
+        .log-entry { margin-bottom: 5px; word-wrap: break-word; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 3px;}
+        .log-time { color: #888; }
+        .log-topic { color: #f39c12; }
+    </style>
+</head>
+<body>
+
+    <div class="ambient-bg">
+        <div class="blob blob-1"></div><div class="blob blob-2"></div><div class="blob blob-3"></div>
+    </div>
+
+    <div class="header">
+        <h1>Centrum Monitoringu</h1>
+        <div class="top-controls">
+            <button id="toggle-terminal">Terminal</button>
+            <div class="theme-switch-wrapper">
+                <span>Dark Mode</span>
+                <label class="switch"><input type="checkbox" id="toggleTheme"><span class="slider"></span></label>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="grid" id="rooms-grid"></div>
+
+        <div class="card chart-section">
+            <canvas id="radarLiveChart"></canvas>
+        </div>
+    </div>
+
+    <div class="log-panel" id="log-container">
+        <h3><span>Live MQTT Monitor</span> <span id="close-terminal">X</span></h3>
+        <div id="logs">
+            <div class="log-entry">Czekam na połączenie z brokerem...</div>
+        </div>
+    </div>
+
+    <script>
+        // 1. Inicjalizacja Wykresu Chart.js (zmienne kolory domyślne dla jasnego motywu)
+        const ctx = document.getElementById('radarLiveChart').getContext('2d');
+        const liveChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], 
+                datasets: [
+                    { label: 'Mikroruchy (Oddech)', borderColor: '#36A2EB', backgroundColor: 'rgba(54, 162, 235, 0.1)', data: [], tension: 0.4, fill: true, pointRadius: 2 },
+                    { label: 'Makroruchy (Ruch ciała)', borderColor: '#FF6384', backgroundColor: 'rgba(255, 99, 132, 0.1)', data: [], tension: 0.4, fill: true, pointRadius: 2 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: 'rgba(100,100,100,0.1)' }, ticks: { color: '#6e6e73' } },
+                    x: { grid: { display: false }, ticks: { color: '#6e6e73' } }
+                },
+                plugins: { legend: { labels: { color: '#1d1d1f' } } }
+            }
+        });
+
+        // 2. Funkcja do płynnej zmiany kolorów wykresu
+        function updateChartColors(mainColor, mutedColor) {
+            liveChart.options.scales.x.ticks.color = mutedColor;
+            liveChart.options.scales.y.ticks.color = mutedColor;
+            liveChart.options.plugins.legend.labels.color = mainColor;
+            liveChart.update();
+        }
+
+        // 3. Obsługa Motywu i terminala
+        const toggleSwitch = document.getElementById('toggleTheme');
+        toggleSwitch.addEventListener('change', e => {
+            if (e.target.checked) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                updateChartColors('#ffffff', '#cccccc'); // Biała czcionka dla Dark Mode
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                updateChartColors('#1d1d1f', '#6e6e73'); // Ciemna czcionka dla Light Mode
+            }
+        });
+
+        // Logika wysuwania panelu połączona z przesuwaniem zawartości
+        const logPanel = document.getElementById('log-container');
+        document.getElementById('toggle-terminal').addEventListener('click', () => {
+            logPanel.classList.add('open');
+            document.body.classList.add('panel-open');
+        });
+        document.getElementById('close-terminal').addEventListener('click', () => {
+            logPanel.classList.remove('open');
+            document.body.classList.remove('panel-open');
+        });
+
+        document.addEventListener('keypress', function(e) {
+            if (e.target.classList.contains('patient-name') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+        });
+
+        // 4. Dodawanie wpisu do logów
+        function appendLog(topic, message) {
+            const logsDiv = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-topic">${topic}</span><br>${message}`;
+            logsDiv.appendChild(entry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        // 5. Tworzenie i aktualizacja kart
+        function createOrUpdateRoom(room, data) {
+            const grid = document.getElementById('rooms-grid');
+            let card = document.getElementById('room-' + room);
+
+            if (!card) {
+                const cardHTML = `
+                    <div class="card" id="room-${room}">
+                        <div class="room-number">Pokój ${room}</div>
+                        <div class="patient-name" contenteditable="true" spellcheck="false">Wpisz Imię</div>
+                        <br>
+                        <div class="status-badge" id="status-${room}">W NORMIE</div>
+                        <div class="metrics">
+                            <div class="metric-group">
+                                <span class="metric-label">Obecność</span>
+                                <span class="metric-value" id="presence-${room}">-</span>
+                            </div>
+                            <div class="metric-group">
+                                <span class="metric-label">Mikroruchy</span>
+                                <span class="metric-value" id="micro-${room}">-</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                grid.insertAdjacentHTML('beforeend', cardHTML);
+                card = document.getElementById('room-' + room);
+            }
+
+            const badge = document.getElementById('status-' + room);
+            document.getElementById('micro-' + room).innerText = data.mikro;
+            document.getElementById('presence-' + room).innerText = data.obecnosc === 1 ? "TAK" : "NIE";
+
+            card.className = 'card'; 
+            if (data.alarm === "OK") {
+                badge.innerText = "W NORMIE"; badge.style.backgroundColor = 'var(--color-ok)';
+            } else if (data.alarm === "UPADEK") {
+                card.classList.add('alarm-upadek'); badge.innerText = "ALARM: UPADEK"; badge.style.backgroundColor = 'var(--color-danger)';
+            } else if (data.alarm === "POZAR") {
+                card.classList.add('alarm-pozar'); badge.innerText = "ALARM: POŻAR"; badge.style.backgroundColor = 'var(--color-critical)';
+            } else if (data.alarm === "ZASIEDZENIE" || data.alarm === "BEZDECH") {
+                card.classList.add('alarm-bezdech'); badge.innerText = data.alarm === 'BEZDECH' ? "BEZDECH" : "ZASIEDZENIE"; badge.style.backgroundColor = 'var(--color-warning)';
+            }
+        }
+
+        // ==========================================
+        // 6. Obsługa MQTT
+        // ==========================================
+        const client = mqtt.connect('ws://10.42.0.1:9001');
+
+        client.on('connect', function () {
+            appendLog('SYSTEM', 'Połączono z serwerem MQTT! Nasłuchuję...');
+            client.subscribe('pokoj/+/radar');
+        });
+
+        client.on('error', function (error) {
+            appendLog('ERROR', 'Błąd połączenia MQTT. Sprawdź IP i port 9001.');
+        });
+
+        client.on('message', function (topic, message) {
+            const rawMsg = message.toString();
+            appendLog(topic, rawMsg);
+
+            try {
+                const data = JSON.parse(rawMsg);
+                const topicParts = topic.split('/');
+                if(topicParts.length >= 2) {
+                    const roomNumber = topicParts[1]; 
+                    createOrUpdateRoom(roomNumber, data);
+                    
+                    const now = new Date().toLocaleTimeString();
+                    liveChart.data.labels.push(now);
+                    liveChart.data.datasets[0].data.push(data.mikro);
+                    liveChart.data.datasets[1].data.push(data.makro);
+
+                    if (liveChart.data.labels.length > 30) {
+                        liveChart.data.labels.shift();
+                        liveChart.data.datasets[0].data.shift();
+                        liveChart.data.datasets[1].data.shift();
+                    }
+                    liveChart.update();
+                }
+            } catch (e) {
+                console.error("Błąd parsowania JSON:", e);
+            }
+        });
+    </script>
+</body>
+</html>

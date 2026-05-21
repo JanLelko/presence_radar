@@ -1,0 +1,23 @@
+○ firewalld.service - firewalld - dynamic firewall daemon
+     Loaded: loaded (]8;;file://fedora/usr/lib/systemd/system/firewalld.service\/usr/lib/systemd/system/firewalld.service]8;;\; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+    Drop-In: /usr/lib/systemd/system/service.d
+             └─]8;;file://fedora/usr/lib/systemd/system/service.d/10-timeout-abort.conf\10-timeout-abort.conf]8;;\
+     Active: inactive (dead) since Mon 2026-05-18 02:32:29 CEST; 16s ago
+   Duration: 27min 33.952s
+ Invocation: 4fc709f441dc4a0c92d0d02e52e39200
+       Docs: ]8;;man:firewalld(1)\man:firewalld(1)]8;;\
+    Process: 1357 ExecStart=/usr/bin/firewalld --nofork --nopid $FIREWALLD_ARGS (code=exited, status=0/SUCCESS)
+   Main PID: 1357 (code=exited, status=0/SUCCESS)
+   Mem peak: 53.2M (swap: 2.5M)
+        CPU: 2.256s
+
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -F DOCKER-ISOLATION-STAGE-1' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -X DOCKER-ISOLATION-STAGE-1' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -F DOCKER-ISOLATION-STAGE-2' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -X DOCKER-ISOLATION-STAGE-2' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -F DOCKER-ISOLATION' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:05:02 fedora firewalld[1357]: [0;1;38:5:185m[0;1;39m[0;1;38:5:185mWARNING: COMMAND_FAILED: '/usr/sbin/ip6tables -w10 -t filter -X DOCKER-ISOLATION' failed: ip6tables: No chain/target/match by that name.[0m
+May 18 02:32:28 fedora systemd[1]: Stopping firewalld.service - firewalld - dynamic firewall daemon...
+May 18 02:32:29 fedora systemd[1]: firewalld.service: Deactivated successfully.
+May 18 02:32:29 fedora systemd[1]: Stopped firewalld.service - firewalld - dynamic firewall daemon.
+May 18 02:32:29 fedora systemd[1]: firewalld.service: Consumed 2.256s CPU time, 53.2M memory peak, 2.5M memory swap peak.

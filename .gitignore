@@ -1,5 +1,7 @@
+.cache/
+CLAUDE.md
+GEMINI.md
 build/
 managed_components/
 dependencies.lock
-.cache/
-
+sdkconfig.old
