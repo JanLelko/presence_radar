@@ -1,24 +1,22 @@
 #include "wifi_mqtt.h"
+#include "captive_portal.h"
 
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include <string.h>
 
-/* ================= USTAWIENIA WI-FI i MQTT ================= */
-#define WIFI_SSID       "fedora_JL"
-#define WIFI_PASS       "piwo2004"
-#define MQTT_BROKER_URI "mqtt://10.42.0.1:1883"   /* IP laptopa-hotspota */
-/* =========================================================== */
-
 static const char *TAG = "WIFI_MQTT";
-
 /* Definicja zmiennej globalnej zadeklarowanej w wifi_mqtt.h */
 esp_mqtt_client_handle_t mqtt_client = NULL;
 
-/* --- Handler zdarzeń Wi-Fi + IP --- */
+// FLAGA ssid, password
+volatile bool wifi_ready = false;
+
+// Handler zdarzeń Wi-Fi + IP  --- ALERTY
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -30,13 +28,109 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Połączono z Wi-Fi! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        wifi_ready = true;
     }
 }
 
-void setup_wifi_esp_idf(void)
-{
-    /* NVS — flash key/value używany m.in. przez sterownik Wi-Fi do trzymania
-     * kalibracji PHY. Bez niego esp_wifi_init() zwróci błąd. */
+// Odczyt NVS (true = mamy prawidłowe dane)
+static bool load_credentials(char* ssid, char* pass) {
+    nvs_handle_t my_handle;
+
+    if (nvs_open("storage", NVS_READONLY, &my_handle) != ESP_OK) {
+        ESP_LOGW(TAG, "Pamięć NVS pusta (brak partycji storage).");
+        return false;
+    }
+
+    size_t ssid_len = 32;
+    size_t pass_len = 64;
+    size_t mqtt_len = 64; // <--- NOWE
+
+    memset(ssid, 0, ssid_len);
+    memset(pass, 0, pass_len);
+
+    char temp_mqtt[64] = {0}; // <--- NOWE (Tymczasowy bufor tylko do logów)
+
+    esp_err_t err_ssid = nvs_get_str(my_handle, "wifi_ssid", ssid, &ssid_len);
+    esp_err_t err_pass = nvs_get_str(my_handle, "wifi_pass", pass, &pass_len);
+    esp_err_t err_mqtt = nvs_get_str(my_handle, "mqtt_uri", temp_mqtt, &mqtt_len); // <--- NOWE
+
+    nvs_close(my_handle);
+
+    // ==========================================
+    // LOGI DIAGNOSTYCZNE - WYPISANIE NA EKRAN
+    // ==========================================
+    ESP_LOGI(TAG, "===================================");
+    ESP_LOGI(TAG, "   ODCZYT Z PAMIĘCI PO RESTARCIE   ");
+
+    if (err_ssid == ESP_OK) ESP_LOGI(TAG, "SSID: '%s'", ssid);
+    else ESP_LOGI(TAG, "SSID: <brak>");
+
+    if (err_pass == ESP_OK) ESP_LOGI(TAG, "PASS: '%s'", pass);
+    else ESP_LOGI(TAG, "PASS: <brak>");
+
+    // NOWE LOGI DLA MQTT:
+    if (err_mqtt == ESP_OK) ESP_LOGI(TAG, "MQTT: '%s'", temp_mqtt);
+    else ESP_LOGI(TAG, "MQTT: <brak>");
+
+    ESP_LOGI(TAG, "===================================");
+
+    // ==========================================
+    // PRAWDZIWY TEST WERYFIKACYJNY
+    // ==========================================
+    if (err_ssid == ESP_OK && strlen(ssid) > 0) {
+        return true;
+    }
+
+    return false;
+}
+
+// 3. LOGOWANIE - dane w nvs (STA)
+static void start_wifi_station(const char* ssid, const char* pass) {
+    ESP_LOGI(TAG, "Uruchamiam tryb Klienta (STA). Łączenie z: %s", ssid);
+    esp_netif_create_default_wifi_sta();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    wifi_config_t wifi_config = {0};
+    strncpy((char *)wifi_config.sta.ssid, ssid, 32);
+    strncpy((char *)wifi_config.sta.password, pass, 64);
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// REJESTRACJA - Hotspot (SoftAP)
+static void start_wifi_softap(void) {
+    ESP_LOGI(TAG, "Brak sieci w NVS. Uruchamiam tryb Hotspot (SoftAP).");
+    esp_netif_create_default_wifi_ap();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = "Konfiguracja_Radaru",
+            .ssid_len = strlen("Konfiguracja_Radaru"),
+            .channel = 1,
+            .password = "",
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN
+        },
+    };
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // start_web_server();
+    start_captive_portal();
+}
+
+// Łączenie z wifi
+void setup_wifi_esp_idf(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -46,32 +140,43 @@ void setup_wifi_esp_idf(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    char saved_ssid[32] = {0};
+    char saved_pass[64] = {0};
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
-
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid     = WIFI_SSID,
-            .password = WIFI_PASS,
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (load_credentials(saved_ssid, saved_pass)) {
+        start_wifi_station(saved_ssid, saved_pass);
+    } else {
+        start_wifi_softap();
+    }
 }
 
+// logowanie do brokera i utrzymanie połącznia
 void setup_mqtt(void)
 {
+    char saved_mqtt_uri[64] = {0};
+
+    // 1. Otwieramy pamięć NVS i próbujemy wyciągnąć zapisany adres MQTT
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK) {
+        size_t len = sizeof(saved_mqtt_uri);
+        nvs_get_str(my_handle, "mqtt_uri", saved_mqtt_uri, &len);
+        nvs_close(my_handle);
+    }
+
+    // 2. Zabezpieczenie inżynierskie: co jeśli NVS jest puste (ktoś nie wpisał adresu)?
+    if (strlen(saved_mqtt_uri) == 0) {
+        ESP_LOGW(TAG, "Brak MQTT URI w pamięci! Używam domyślnego awaryjnego...");
+        strcpy(saved_mqtt_uri, "mqtt://10.42.0.1:1883"); // Twój awaryjny adres
+    }
+
+    ESP_LOGI(TAG, "Uruchamiam klienta MQTT. Docelowy adres: %s", saved_mqtt_uri);
+
+    // 3. Konfigurujemy klienta znalezionym (lub awaryjnym) adresem
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = MQTT_BROKER_URI,
+        .broker.address.uri = saved_mqtt_uri,
     };
+
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_start(mqtt_client);
 }

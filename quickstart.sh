@@ -29,3 +29,5 @@ echo "Opcja B (BEZ KABLA) : Wpisz ->  mosquitto_sub -h 127.0.0.1 -t 'pokoj/101/r
 echo "--------------------------------------------------------"
 echo "=== PAMIETAJ O FIREWALLD ===="
 echo "sudo systemctl stop firewalld"
+echo "=== PAMIETAJ O HOTSPOT WIFI==="
+echo "wejdz w ustawienia wifi"

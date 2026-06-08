@@ -2093,16 +2093,6 @@
 			(embedded_fonts no)
 		)
 	)
-	(text "3.3V"
-		(exclude_from_sim no)
-		(at 176.53 64.516 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "1968ca3b-0154-4053-83a7-e64282a08049")
-	)
 	(junction
 		(at 128.27 36.83)
 		(diameter 0)
@@ -2807,7 +2797,7 @@
 		(dnp no)
 		(uuid "30c8d818-525d-4d26-980d-8c0eda07bd1a")
 		(property "Reference" "U2"
-			(at 69.342 68.326 0)
+			(at 68.58 66.04 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2815,14 +2805,14 @@
 			)
 		)
 		(property "Value" "Waveshare_A121_Radar"
-			(at 79.248 71.374 0)
+			(at 78.232 68.072 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x10_P2.54mm_Vertical"
 			(at 85.09 86.36 0)
 			(effects
 				(font
@@ -3236,10 +3226,9 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "8154e244-e9e2-4407-b8de-70c390d6a8cd")
 		(property "Reference" "U1"
-			(at 191.77 59.69 0)
+			(at 180.594 60.96 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3247,14 +3236,14 @@
 			)
 		)
 		(property "Value" "ESP32_C6_WROOM_1_DEV"
-			(at 191.77 62.23 0)
+			(at 191.262 63.246 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "moje_obudowy:ESP32_C6_Devkit"
 			(at 179.07 64.77 0)
 			(effects
 				(font

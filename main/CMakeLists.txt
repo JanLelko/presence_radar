@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "wifi_mqtt.c"
         "radar.c"
+        "captive_portal.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         mqtt
@@ -11,4 +12,5 @@ idf_component_register(
         esp_event
         esp_netif
         nvs_flash
+	esp_http_server
 )

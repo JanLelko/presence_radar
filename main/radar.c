@@ -38,6 +38,7 @@ static esp_err_t radar_write_reg32(uint16_t reg, uint32_t value)
                                       1000 / portTICK_PERIOD_MS);
 }
 
+// konfiguracja i2c
 esp_err_t init_i2c_master(void)
 {
     i2c_config_t conf = {
@@ -55,6 +56,7 @@ esp_err_t init_i2c_master(void)
     return i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
 }
 
+// Sekwencja startowa odpalenia radaru
 esp_err_t start_radar_sensor(void)
 {
     /* 1) Apply config — zatwierdzamy domyślną konfigurację detektora. */

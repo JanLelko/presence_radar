@@ -655,7 +655,7 @@
 			)
 		)
 		(property "Value" "Waveshare_A121_Radar"
-			(at -0.254 13.462 0)
+			(at -6.858 -17.78 0)
 			(effects
 				(font
 					(size 1.27 1.27)

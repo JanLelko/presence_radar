@@ -1,6 +1,7 @@
 #ifndef WIFI_MQTT_H
 #define WIFI_MQTT_H
 
+#include <stdbool.h>
 #include "mqtt_client.h"
 
 /*
@@ -17,5 +18,12 @@ void setup_wifi_esp_idf(void);
 /* Inicjalizuje i uruchamia klienta MQTT pod adresem MQTT_BROKER_URI.
  * Należy wywołać DOPIERO po setup_wifi_esp_idf(). */
 void setup_mqtt(void);
+
+// Globalna flaga statusu połączenia
+extern volatile bool wifi_ready;
+
+
+
+
 
 #endif /* WIFI_MQTT_H */
