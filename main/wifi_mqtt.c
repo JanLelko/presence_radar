@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "dhcpserver/dhcpserver.h"   // OFFER_DNS - opcja DHCP "podaj klientowi DNS"
 #include <string.h>
 
 static const char *TAG = "WIFI_MQTT";
@@ -106,7 +107,7 @@ static void start_wifi_station(const char* ssid, const char* pass) {
 // REJESTRACJA - Hotspot (SoftAP)
 static void start_wifi_softap(void) {
     ESP_LOGI(TAG, "Brak sieci w NVS. Uruchamiam tryb Hotspot (SoftAP).");
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
@@ -124,6 +125,22 @@ static void start_wifi_softap(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Serwer DHCP (rozdaje telefonom adresy IP) domyslnie NIE podaje DNS-a.
+    // Wlaczamy te opcje i wskazujemy nas (192.168.4.1) jako serwer DNS, zeby
+    // telefon kierowal swoje zapytania DNS do nas - i dzieki temu zadzialal
+    // captive portal. Opcje DHCP wolno zmieniac tylko przy zatrzymanym serwerze.
+    esp_netif_dns_info_t dns = {
+        .ip.type = ESP_IPADDR_TYPE_V4,
+        .ip.u_addr.ip4.addr = ESP_IP4TOADDR(192, 168, 4, 1),
+    };
+    dhcps_offer_t dhcps_flag_dns = OFFER_DNS;
+    ESP_ERROR_CHECK(esp_netif_dhcps_stop(ap_netif));
+    ESP_ERROR_CHECK(esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET,
+                                           ESP_NETIF_DOMAIN_NAME_SERVER,
+                                           &dhcps_flag_dns, sizeof(dhcps_flag_dns)));
+    ESP_ERROR_CHECK(esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dns));
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(ap_netif));
 
     // start_web_server();
     start_captive_portal();

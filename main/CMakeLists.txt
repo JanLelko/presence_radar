@@ -4,13 +4,16 @@ idf_component_register(
         "wifi_mqtt.c"
         "radar.c"
         "captive_portal.c"
+        "dns_server.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         mqtt
         driver
+        esp_driver_gpio
         esp_wifi
         esp_event
         esp_netif
         nvs_flash
 	esp_http_server
+        lwip
 )

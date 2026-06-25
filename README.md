@@ -157,3 +157,9 @@ Radar ma zasiloną elektronikę, ale antena nie wystartowała (Pamięć zwraca �
     Sprawdź, czy na pewno wysłałeś komendę START (2) do rejestru 0x0100.
 
     Jeśli wysłałeś np. 3 – kazałeś mu się zatrzymać (Stop Detector).
+#linki
+	- https://www.waveshare.com/wiki/A121_Range_Sensor#Documents
+	- https://www.youtube.com/watch?v=Puh9MMC1Ft0
+	- https://docs.acconeer.com/en/latest/exploration_tool/index.html
+	- https://documentation.espressif.com/esp32-c6-wroom-1_wroom-1u_datasheet_en.html#pcb_layout_recommendations
+	- https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/i2c.html
