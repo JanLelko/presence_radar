@@ -9,6 +9,23 @@ Legenda ryzyka:
 
 ---
 
+## ✅ Zrobione (czerwiec 2026)
+
+- **Auto-popup portalu (pkt 1)** — własny serwer DNS (`dns_server.c`) kieruje cały ruch na `192.168.4.1`,
+  a handler 404 przekierowuje sondy wykrywania (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`…) na portal (302).
+- **Reset konfiguracji przyciskiem (wariant pkt 2a)** — przytrzymanie GPIO9 ~3 s kasuje sieć/MQTT z NVS i restartuje
+  do portalu (3× sygnał LED+buzzer). Powrót do konfiguracji bez reflashu.
+- **Rozróżnienie offline ≠ pusty pokój (pkt 5)** — dashboard ma watchdog: brak danych >10 s lub pad brokera
+  wyszarza kartę i pokazuje **OFFLINE**.
+- **Alarm „brak obecności / utrata łączności” (nowe)** — przełącznik **Alarm** w panelu; po uzbrojeniu dźwięk
+  (Web Audio) + czerwony baner, gdy nikogo nie ma pod czujnikiem albo gdy znika łączność. W całości po stronie przeglądarki.
+- **Nowy wygląd Captive Portala** — biało-miętowy/turkusowy, minimalistyczny, ikona oka (`icon.svg`),
+  osobna biała strona-potwierdzenie po zapisie.
+- **Sprzątanie (część pkt 6)** — usunięta martwa `wifi_event_handler` z `main.c`.
+- **`.gitignore` dla artefaktów KiCada** — autosave/backupy/cache/locki nie są już wersjonowane.
+
+---
+
 ## ⚠️ Najpierw przeczytaj: HTTPS na Captive Portal to pułapka
 
 Życzenia „HTTPS” i „automatyczny popup z linkiem po połączeniu” **są ze sobą w sprzeczności**:
@@ -29,11 +46,10 @@ szyfruje cały ruch, odsiewa obcych i **nie psuje** popupu. Decyzja należy do C
 Dziś po wejściu do sieci `Konfiguracja_Radaru` trzeba **ręcznie wpisać IP** w przeglądarce — bo brak serwera DNS
 i brak endpointów wykrywania. To jest dokładnie to, czego brakuje do „alertu z linkiem”.
 
-- [ ] 🟢 Dodać serwer **DNS**, który każde zapytanie kieruje na IP AP (`192.168.4.1`).
-- [ ] 🟢 Dodać handlery HTTP wykrywania portalu: `/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`,
-      `/connecttest.txt` → przekierowanie (302) na `/`.
-- [ ] 🟢 Najprościej: oprzeć się o oficjalny przykład ESP-IDF **`protocols/http_server/captive_portal`**
-      (ma już gotowy DNS→AP + endpointy). Skopiować wzorzec zamiast pisać własny hijack UDP DNS od zera.
+- [x] 🟢 ✅ Serwer **DNS** kierujący każde zapytanie na IP AP (`192.168.4.1`) — `dns_server.c`.
+- [x] 🟢 ✅ Wykrywanie portalu: catch-all handler 404 → przekierowanie (302) na `/` (łapie `/generate_204`,
+      `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt` itd.) — `captive_portal.c`.
+- [~] 🟢 (N/A) Zamiast przykładu ESP-IDF napisano własny, lekki DNS + redirect — działa, temat zamknięty.
 - [ ] 🟢 (Opcjonalnie, do weryfikacji) Nowsze iOS/Android wspierają **RFC 8910 / DHCP option 114**
       (URI portalu podany przez DHCP). Sprawdzić, czy nasza wersja ESP-IDF to udostępnia — to czystszy popup.
       Traktować jako „sprawdzić”, nie jako pewne API.
@@ -50,8 +66,9 @@ startuje **tylko gdy NVS jest puste** (`wifi_mqtt.c`). Skutek: złe hasło albo 
 `wifi_ready` nigdy `true`, MQTT zablokowane na zawsze, **powrót do portalu wymaga reflashu**.
 
 - [ ] 🟠 Dodać licznik prób (np. 5–10) → po przekroczeniu **fallback do SoftAP/portalu** zamiast pętli.
-- [ ] 🟢 Alternatywnie/dodatkowo: **przytrzymanie BOOT przy starcie** wymusza tryb konfiguracji (czyści/omija NVS).
-      To wariant ADDITIVE — nie rusza logiki reconnectu, tylko dodaje wejście do portalu.
+      **Wciąż otwarte i nadal najważniejsze** — reset przyciskiem nie zastępuje automatycznego fallbacku przy złym haśle.
+- [x] 🟢 ✅ **Wejście do portalu przyciskiem** — przytrzymanie GPIO9 ~3 s kasuje SSID/hasło/MQTT z NVS i restartuje
+      do Captive Portala (3× LED+buzzer). Zrobione w `main.c` (runtime, nie tylko przy starcie).
 
 ### 2b. 🟠 Ślepe `vTaskDelay(3000)` w `app_main` przed I2C
 `main.c` czeka na sztywno 3 s licząc, że Wi-Fi wstanie. Czasem za mało (wolny DHCP), czasem niepotrzebnie wolno.
@@ -85,25 +102,24 @@ Doprecyzowanie: są dwie różne strony. Warto zaplanować obie.
 ---
 
 ## 5. Z poprzedniego TODO (zachowane)
-- [ ] 🟢 **Komunikat „błąd połączenia” zamiast „brak obecności”.** Gdy brak danych / stare dane z brokera,
-      dashboard interpretuje to jako „brak obecności”. Dodać rozróżnienie: brak łączności ≠ pusty pokój
-      (np. timestamp ostatniej wiadomości + status „offline” na karcie pokoju).
+- [x] 🟢 ✅ **Rozróżnienie „brak łączności” ≠ „pusty pokój”.** Dashboard ma watchdog: timestamp ostatniej
+      wiadomości per pokój, brak danych >10 s lub pad brokera → karta **OFFLINE** (wyszarzona) — `dashboard/index.html`.
+      Dorzucony przełącznik **Alarm**: po uzbrojeniu dźwięk + baner przy braku obecności LUB utracie łączności.
 
 ---
 
 ## 6. Sprzątanie kodu (kosmetyka, nie pilne)
-- [ ] 🟢 W `main.c` jest **martwa, zduplikowana** funkcja `wifi_event_handler` (linie ~32–42) — nigdzie nie
-      rejestrowana; żywa wersja jest w `wifi_mqtt.c`. Usunąć, żeby nie mylić.
+- [x] 🟢 ✅ Usunięto martwą, zduplikowaną `wifi_event_handler` z `main.c` (żywa wersja jest w `wifi_mqtt.c`).
 - [ ] 🟢 Usunąć diagnostyczne `ESP_LOGI` wypisujące **hasło Wi-Fi otwartym tekstem** w `load_credentials`
       (`wifi_mqtt.c`) — wyciek w logu serialowym.
 - [ ] 🟢 Zakomentowane `// start_web_server();` w `wifi_mqtt.c` — uprzątnąć.
 
 ---
 
-### Sugerowana kolejność (najpierw bezpieczne, największy zysk)
-1. 🟢 Pkt 1 — DNS + endpointy wykrywania (auto-popup). Największy efekt „wow”, zero ryzyka dla STA.
+### Sugerowana kolejność tego, co ZOSTAŁO (najpierw bezpieczne, największy zysk)
+1. 🟢 Pkt 6 (reszta) — usunąć log hasła otwartym tekstem w `load_credentials` + zakomentowane `// start_web_server();`. Szybkie, zamyka wyciek.
 2. 🟢 Pkt 4 — hasło WPA2 na AP (zamiast HTTPS).
-3. 🟠 Pkt 2a — fallback z pętli reconnectu (najważniejsza odporność, ale rusza ścieżkę połączenia → osobna gałąź).
-4. 🟢 Pkt 3b / Pkt 5 — hosting dashboardu + rozróżnienie offline.
+3. 🟠 Pkt 2a — **licznik prób → fallback do portalu** (najważniejsza odporność; reset przyciskiem to nie to samo).
+4. 🟢 Pkt 3b — serwowanie dashboardu prosto z ESP.
 5. 🟠 Pkt 2b — EventGroup zamiast `delay(3000)`.
-6. 🟢 Pkt 6 — sprzątanie.
+6. 🟢 Pkt 2c — drobiazgi łączenia (`strncpy` `\0`, szybsze skanowanie STA).

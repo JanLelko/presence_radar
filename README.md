@@ -240,6 +240,20 @@ wiadomość leci natychmiast. Podgląd bez dashboardu:
 mosquitto_sub -h 127.0.0.1 -t 'pokoj/101/radar' -v
 ```
 
+### Alarm „brak obecności” / utrata łączności
+
+W nagłówku panelu jest przełącznik **Alarm**. Po uzbrojeniu dashboard reaguje
+dźwiękiem (Web Audio — bez plików) i czerwonym banerem, gdy:
+
+- **nikogo nie ma pod czujnikiem** — `obecnosc == 0` utrzymuje się dłużej niż
+  krótka karencja (filtruje chwilowe mrugnięcia radaru), **albo**
+- **znika łączność** — broker padł lub czujnik milczy > 10 s. Karty pokoi
+  przechodzą wtedy w stan **OFFLINE** (wyszarzone), żeby odróżnić „pusty pokój”
+  od „brak danych”.
+
+Całość działa po stronie przeglądarki — bez zmian we firmware. Pierwsze kliknięcie
+przełącznika odblokowuje dźwięk (polityka autoplay przeglądarki).
+
 ---
 
 ## 🎚️ 8. Kalibracja i logika alarmów
@@ -271,13 +285,14 @@ presence_radar/
 │   ├── main.c            # app_main: I2C, pętla odczytu radaru, logika alarmów, MQTT
 │   ├── radar.c / .h      # warstwa I2C radaru XM125
 │   ├── wifi_mqtt.c / .h  # Wi-Fi (STA/SoftAP), NVS, klient MQTT, wybór trybu
-│   ├── captive_portal.c  # serwer HTTP portalu konfiguracji
+│   ├── captive_portal.c  # serwer HTTP portalu konfiguracji (styl miętowy, ikona oka)
 │   ├── dns_server.c / .h # DNS przekierowujący ruch na portal (192.168.4.1)
 │   └── CMakeLists.txt
 ├── dashboard/
-│   ├── index.html        # panel pielęgniarki (MQTT-over-WebSockets)
+│   ├── index.html        # panel pielęgniarki (MQTT-over-WebSockets) + przełącznik Alarm
 │   ├── mqtt.min.js
 │   └── chart.js.js
+├── icon.svg              # logo projektu — minimalistyczne oko (używane też w portalu)
 ├── hardware/             # materiały sprzętowe (radar_xm125_esp32c6)
 ├── examples/             # standalone'y do bring-upu (nie wchodzą do builda)
 ├── components/           # placeholdery pod przyszły refaktor (puste)
