@@ -54,6 +54,23 @@
         .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 3px; background-color: white; border-radius: 50%; transition: .4s;}
         input:checked + .slider { background-color: rgba(0, 122, 255, 0.6); }
         input:checked + .slider:before { transform: translateX(20px); }
+        input:checked + .slider.slider-alarm { background-color: rgba(255, 59, 48, 0.75); }
+
+        /* Baner alarmu (tekst ustawiany z JS — zależy od powodu) */
+        #alarm-banner {
+            display: none;
+            position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+            background: var(--color-danger); color: #fff; text-align: center;
+            padding: 14px; font-weight: 800; letter-spacing: 0.5px;
+            box-shadow: 0 4px 20px rgba(255, 59, 48, 0.6);
+            animation: alarm-flash 0.7s infinite alternate;
+        }
+        body.alarm-active #alarm-banner { display: block; }
+        @keyframes alarm-flash { to { opacity: 0.45; } }
+
+        /* Karta czujnika bez łączności */
+        .card.offline { opacity: 0.55; filter: grayscale(0.65); }
+        .status-badge.offline-badge { background-color: var(--text-muted) !important; }
 
         #toggle-terminal {
             background: var(--glass-bg); color: var(--text-main); border: 1px solid var(--glass-border-top);
@@ -120,6 +137,8 @@
 </head>
 <body>
 
+    <div id="alarm-banner"></div>
+
     <div class="ambient-bg">
         <div class="blob blob-1"></div><div class="blob blob-2"></div><div class="blob blob-3"></div>
     </div>
@@ -128,6 +147,10 @@
         <h1>Centrum Monitoringu</h1>
         <div class="top-controls">
             <button id="toggle-terminal">Terminal</button>
+            <div class="theme-switch-wrapper">
+                <span>Alarm</span>
+                <label class="switch"><input type="checkbox" id="toggleAlarm"><span class="slider slider-alarm"></span></label>
+            </div>
             <div class="theme-switch-wrapper">
                 <span>Dark Mode</span>
                 <label class="switch"><input type="checkbox" id="toggleTheme"><span class="slider"></span></label>
@@ -191,6 +214,109 @@
                 updateChartColors('#1d1d1f', '#6e6e73'); // Ciemna czcionka dla Light Mode
             }
         });
+
+        // ==========================================
+        // Alarm: brak obecności LUB utrata łączności (switch w panelu)
+        // ==========================================
+        let alarmArmed = false;        // czy alarm jest uzbrojony
+        let alarmFiring = false;       // czy aktualnie wyje
+        let brokerConnected = false;   // czy mamy łączność z brokerem
+        const OFFLINE_TIMEOUT = 10000; // brak wiadomości > 10 s = czujnik offline
+        const ABSENCE_GRACE   = 1500;  // ile ms pustki zanim uznamy "brak obecności"
+        const lastSeen = {};           // pokój -> czas ostatniej wiadomości
+        const absentSince = {};        // pokój -> odkąd pusto (null gdy obecność)
+        let audioCtx = null;
+        let beepInterval = null;
+
+        function beep() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.value = 880;
+            gain.gain.value = 0.18;
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.25);
+        }
+
+        function startAlarm(reason) {
+            document.getElementById('alarm-banner').innerText = reason;
+            if (alarmFiring) return;   // już wyje — tylko zaktualizuj powód na banerze
+            alarmFiring = true;
+            document.body.classList.add('alarm-active');
+            appendLog('ALARM', reason);
+            beep();
+            beepInterval = setInterval(beep, 700);
+        }
+
+        function stopAlarm() {
+            if (!alarmFiring) return;
+            alarmFiring = false;
+            document.body.classList.remove('alarm-active');
+            if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+        }
+
+        // Jedno miejsce decyzyjne: czy alarm ma wyć i z jakiego powodu.
+        function refreshAlarmState() {
+            if (!alarmArmed) { stopAlarm(); return; }
+            const now = Date.now();
+            const rooms = Object.keys(lastSeen);
+
+            // 1) utrata łączności — priorytet (broker padł albo czujnik milczy)
+            if (!brokerConnected) {
+                startAlarm('⚠  ALARM — UTRACONO POŁĄCZENIE Z BROKEREM'); return;
+            }
+            if (rooms.some(r => now - lastSeen[r] > OFFLINE_TIMEOUT)) {
+                startAlarm('⚠  ALARM — UTRACONO ŁĄCZNOŚĆ Z CZUJNIKIEM'); return;
+            }
+            // 2) brak obecności (z krótką karencją na mrugnięcia radaru)
+            if (rooms.some(r => absentSince[r] && now - absentSince[r] > ABSENCE_GRACE)) {
+                startAlarm('⚠  ALARM — BRAK OBECNOŚCI POD CZUJNIKIEM'); return;
+            }
+            // wszystko OK
+            stopAlarm();
+        }
+
+        const alarmSwitch = document.getElementById('toggleAlarm');
+        alarmSwitch.addEventListener('change', e => {
+            alarmArmed = e.target.checked;
+            // Pierwszy klik odblokowuje dźwięk w przeglądarce (polityka autoplay).
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            appendLog('SYSTEM', alarmArmed ? 'Alarm UZBROJONY (brak obecności lub utrata łączności)' : 'Alarm rozbrojony');
+            refreshAlarmState();
+        });
+
+        // Oznacza/zdejmuje stan OFFLINE na karcie pokoju.
+        function setRoomOffline(room, off) {
+            const card = document.getElementById('room-' + room);
+            const badge = document.getElementById('status-' + room);
+            if (!card || !badge) return;
+            if (off) {
+                card.classList.add('offline');
+                badge.classList.add('offline-badge');
+                badge.innerText = 'OFFLINE';
+            } else {
+                card.classList.remove('offline');
+                badge.classList.remove('offline-badge');
+            }
+        }
+
+        // Wszystkie karty offline (np. gdy padnie broker — bez czekania na timeout).
+        function markAllCardsOffline() {
+            for (const room of Object.keys(lastSeen)) setRoomOffline(room, true);
+        }
+
+        // Watchdog: oznacza karty jako OFFLINE i co sekundę odświeża stan alarmu.
+        setInterval(() => {
+            const now = Date.now();
+            for (const room of Object.keys(lastSeen)) {
+                const stale = !brokerConnected || (now - lastSeen[room] > OFFLINE_TIMEOUT);
+                setRoomOffline(room, stale);
+            }
+            refreshAlarmState();
+        }, 1000);
 
         // Logika wysuwania panelu połączona z przesuwaniem zawartości
         const logPanel = document.getElementById('log-container');
@@ -268,8 +394,22 @@
         const client = mqtt.connect('ws://10.42.0.1:9001');
 
         client.on('connect', function () {
+            brokerConnected = true;
             appendLog('SYSTEM', 'Połączono z serwerem MQTT! Nasłuchuję...');
             client.subscribe('pokoj/+/radar');
+            refreshAlarmState();
+        });
+
+        client.on('close', function () {
+            brokerConnected = false;
+            markAllCardsOffline();
+            refreshAlarmState();
+        });
+
+        client.on('offline', function () {
+            brokerConnected = false;
+            markAllCardsOffline();
+            refreshAlarmState();
         });
 
         client.on('error', function (error) {
@@ -284,8 +424,17 @@
                 const data = JSON.parse(rawMsg);
                 const topicParts = topic.split('/');
                 if(topicParts.length >= 2) {
-                    const roomNumber = topicParts[1]; 
+                    const roomNumber = topicParts[1];
                     createOrUpdateRoom(roomNumber, data);
+
+                    // Ewidencja na potrzeby alarmu: czas ostatniej wiadomości + obecność
+                    lastSeen[roomNumber] = Date.now();
+                    if (data.obecnosc === 0) {
+                        if (!absentSince[roomNumber]) absentSince[roomNumber] = Date.now();
+                    } else {
+                        absentSince[roomNumber] = null;
+                    }
+                    refreshAlarmState();
                     
                     const now = new Date().toLocaleTimeString();
                     liveChart.data.labels.push(now);
