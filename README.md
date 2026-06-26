@@ -1,165 +1,334 @@
-# Integracja Radaru Acconeer XM125 (STM32) z ESP32-C6 na Linuxie
+# Radar obecności XM125 + ESP32-C6
 
-Projekt ten opisuje pełen proces uruchomienia modułu radaru (opartego na układzie STM32 i czujniku A121) oraz zintegrowania go z mikrokontrolerem ESP32-C6 za pomocą magistrali I2C w środowisku Linux (Fedora/Ubuntu).
+Firmware ESP-IDF dla **ESP32-C6**, które czyta moduł radaru **Acconeer XM125**
+(czujnik A121 + STM32) po I2C, stosuje lokalne reguły *edge computing*
+(obecność / upadek / przegrzanie / zasiedzenie) i publikuje status w formacie
+JSON do brokera **MQTT**. Statyczny dashboard (`dashboard/index.html`)
+subskrybuje broker przez MQTT-over-WebSockets i pokazuje karty pokoi.
+
+Konfiguracja Wi-Fi i adresu brokera odbywa się przez **Captive Portal** —
+przy pierwszym uruchomieniu (albo po resecie konfiguracji) urządzenie stawia
+własny hotspot, na którym z telefonu wpisujesz sieć i adres MQTT. Nic nie jest
+zaszyte na sztywno w kodzie.
+
+> Cały opis dotyczy Linuksa (Fedora/Ubuntu). Target to ESP32-C6 (RISC-V) —
+> **nie** domyślny ESP32.
+
+---
+
+## 📑 Spis treści
+
+1. [Podłączenie sprzętowe](#-1-podłączenie-sprzętowe-hardware)
+2. [Wgrywanie firmware na radar (STM32)](#%EF%B8%8F-2-wgrywanie-firmware-na-radar-stm32)
+3. [Test radaru na PC (opcjonalnie)](#-3-test-radaru-na-pc-opcjonalnie)
+4. [Protokół I2C radaru](#-4-protokół-i2c-radaru)
+5. [Budowanie i wgrywanie na ESP32-C6](#-5-budowanie-i-wgrywanie-na-esp32-c6)
+6. [Pierwsze uruchomienie: Captive Portal](#-6-pierwsze-uruchomienie-captive-portal)
+7. [Broker MQTT i dashboard](#-7-broker-mqtt-i-dashboard)
+8. [Kalibracja i logika alarmów](#-8-kalibracja-i-logika-alarmów)
+9. [Struktura projektu](#-9-struktura-projektu)
+10. [Rozwiązywanie problemów](#-10-rozwiązywanie-problemów-troubleshooting)
+11. [Linki](#-11-linki)
 
 ---
 
 ## 🔌 1. Podłączenie sprzętowe (Hardware)
 
-Połączenie między ESP32-C6 a modułem radaru wymaga uwzględnienia jednej **krytycznej** rzeczy – pinu WAKE_UP. Bez niego radar sprzętowo odpowiada na I2C samymi zerami.
+Najważniejsza rzecz to pin **WAKE_UP**. Bez podciągnięcia go do 3.3V STM32 na
+module śpi i odpowiada na I2C samymi zerami — co łatwo pomylić z błędem okablowania.
 
-| ESP32-C6 Pin | Radar Pin | Opis |
-| :--- | :--- | :--- |
-| **5V / VBUS** | 5V | Zasilanie główne modułu |
-| **GND** | GND | Masa |
-| **GPIO 10** | SDA | Linia danych I2C |
-| **GPIO 11** | SCL | Linia zegara I2C |
-| **3.3V (VCC)**| **WAKE_UP** | **KRYTYCZNE:** Wymusza wybudzenie STM32 ze stanu Deep Sleep! |
+| ESP32-C6        | Moduł / element | Opis                                                              |
+| :-------------- | :-------------- | :---------------------------------------------------------------- |
+| **5V / VBUS**   | Radar 5V        | Zasilanie główne modułu                                           |
+| **GND**         | Radar GND       | Masa                                                              |
+| **GPIO 2**      | Radar SDA       | Linia danych I2C                                                  |
+| **GPIO 11**     | Radar SCL       | Linia zegara I2C                                                  |
+| **3.3V (VCC)**  | Radar WAKE_UP   | **KRYTYCZNE:** wymusza wybudzenie STM32 z Deep Sleep              |
+| GPIO 10         | Radar INT       | Wyjście INT z radaru (zarezerwowane, na razie nieużywane w kodzie)|
+| GPIO 18         | LED             | Sygnalizacja (np. potwierdzenie resetu konfiguracji)             |
+| GPIO 9          | Przycisk        | Między GPIO9 a GND, wewnętrzny pull-up (wciśnięty = stan niski)   |
+| GPIO 3          | Buzzer          | Sygnał dźwiękowy                                                  |
+
+> Piny I2C są zdefiniowane na górze `main/main.c` (`I2C_MASTER_SDA_IO`,
+> `I2C_MASTER_SCL_IO`). Jeśli zmienisz okablowanie — popraw tam.
 
 ---
 
-## 🛠️ 2. Faza przygotowawcza: Oprogramowanie PC
+## ⚡️ 2. Wgrywanie firmware na radar (STM32)
 
-Aby wgrać firmware I2C na radar, potrzebujesz oficjalnego narzędzia Acconeer Exploration Tool.
+Żeby STM32 na module działał jako serwer I2C „Presence Detector”, trzeba go
+najpierw sflashować oficjalnym narzędziem **Acconeer Exploration Tool**.
 
-### Przygotowanie środowiska Python
-Nie instaluj paczek globalnie. Stwórz dedykowane środowisko wirtualne:
+### Środowisko Python
+
+Nie instaluj paczek globalnie — użyj dedykowanego venv:
+
 ```bash
 mkdir -p ~/main/tools && cd ~/main/tools
 python3 -m venv .venv
-source .venv/bin/activate
-(Pamiętaj, że komendę source musisz wpisać w folderze, w którym utworzyłeś .venv).Instalacja Exploration ToolBashpip install "acconeer-exptool[app]"
+source .venv/bin/activate          # source wpisz w folderze, w którym jest .venv
+pip install "acconeer-exptool[app]"
+```
 
-##⚡ 3. Wgrywanie Firmware'u na Radar (STM32)Aby układ STM32 na radarze działał jako serwer I2C "Presence Detector", musisz go najpierw sflashować.Tryb Bootloadera (Hardware)Zanim spróbujesz wgrać soft, musisz wprowadzić moduł w tryb pobierania:Wciśnij i trzymaj przycisk BOOT.Kliknij raz przycisk RST (Reset).Puść przycisk BOOT.Flashowanie przez aplikacjęUruchom narzędzie: python -m acconeer.exptool.appPrzejdź do zakładki Flash.Wybierz port (np. /dev/ttyACM0). Użyj opcji "Show all devices" jeśli lista jest pusta.Wgraj plik z firmware (np. i2c_presence_detector).📊 4. Test Radaru na PC (Opcjonalnie)Zanim przejdziesz do ESP32, warto sprawdzić, czy radar widzi obiekty:Zmień port: Układ CH342 tworzy dwa porty (np. ACM0 i ACM1). Do odczytu danych użyj drugiego portu.Zmień Baudrate: Ustaw na 921600 (inaczej aplikacja zgłosi błąd timeoutu).Zresetuj moduł (kliknij RST).Połącz się, wybierz konfigurację i kliknij Start Measurement.🧠 5. Protokół I2C: Jak komunikować się z radarem?Moduł działa jako "Slave" pod adresem I2C 0x52. Posiada własną, specyficzną architekturę rejestrów:Adresy rejestrów są 16-bitowe (2 bajty).Dane w rejestrach są 32-bitowe (4 bajty). Zawsze musisz odczytać lub zapisać równe 4 bajty.Najważniejsze adresy (Rejestry)Adres (Dec)Adres (Hex)NazwaTypOpis00x0000WersjaRWersja firmware. Jeśli wczytujesz tu zera, WAKE_UP nie jest podłączony.30x0003StatusRStatus detektora (0xFF oznacza gotowość, ale brak startu).160x0010ObecnośćRWynik detekcji (Bit 0 określa ruch: 1=Ruch, 0=Pusto).170x0011OdległośćRWykryta odległość w milimetrach.2560x0100KomendyWRejestr sterujący stanem radaru.Procedura Startowa (Init Sequence)Radar po podłączeniu zasilania nie wykonuje pomiarów. Czeka na instrukcje. Aby wystartował, musisz wysłać dwie komendy pod adres 0x0100:Zastosuj konfigurację (Apply): Wyślij wartość 1.Start pomiarów (Start): Wyślij wartość 2.Przykład wysłania komendy I2C w ESP-IDF:Adres wysyłamy jako 2 bajty, a komendę jako 4 bajty.C// Wysłanie komendy START (2) do rejestru 0x0100
+### Tryb bootloadera (hardware)
 
+Zanim wgrasz soft, wprowadź moduł w tryb pobierania:
+
+1. Wciśnij i **trzymaj** przycisk `BOOT`.
+2. Kliknij raz `RST` (Reset).
+3. Puść `BOOT`.
+
+### Flashowanie przez aplikację
+
+1. Uruchom narzędzie: `python -m acconeer.exptool.app`
+2. Wejdź w zakładkę **Flash**.
+3. Wybierz port (np. `/dev/ttyACM0`). Jeśli lista jest pusta, użyj **„Show all devices”**.
+4. Wgraj firmware (np. `i2c_presence_detector`).
+
+---
+
+## 📊 3. Test radaru na PC (opcjonalnie)
+
+Zanim przejdziesz do ESP32, możesz sprawdzić, czy radar w ogóle widzi obiekty:
+
+1. **Zmień port** — układ CH342 tworzy dwa porty (np. `ACM0` i `ACM1`). Do
+   odczytu danych użyj **drugiego** portu.
+2. **Zmień baudrate** na `921600` (inaczej aplikacja zgłosi timeout).
+3. Zresetuj moduł (`RST`).
+4. Połącz się, wybierz konfigurację i kliknij **Start Measurement**.
+
+---
+
+## 🧠 4. Protokół I2C radaru
+
+Moduł działa jako I2C **slave** pod adresem **`0x52`**:
+
+- adresy rejestrów są **16-bitowe** (2 bajty, MSB first),
+- wartości rejestrów są **32-bitowe big-endian** (4 bajty),
+- każdy odczyt/zapis musi obejmować **wielokrotność 4 bajtów** danych.
+
+### Najważniejsze rejestry
+
+| Hex      | Dec | Nazwa     | R/W | Opis                                                            |
+| :------- | :-- | :-------- | :-- | :------------------------------------------------------------- |
+| `0x0000` | 0   | Wersja    | R   | Wersja firmware. Same zera ⇒ **WAKE_UP nie podłączony**        |
+| `0x0003` | 3   | Status    | R   | Status detektora (`0xFF` = gotowy, ale nie wystartowany)        |
+| `0x0010` | 16  | Wynik     | R   | Pierwszy z 4 rejestrów wyniku (obecność/dystans/intra/inter)    |
+| `0x0100` | 256 | Komendy   | W   | Sterowanie (`1`=apply config, `2`=start, `3`=stop)              |
+
+### Procedura startowa (init)
+
+Radar po włączeniu zasilania nie mierzy — czeka na komendy. Pod rejestr `0x0100`
+trzeba wysłać:
+
+1. **Apply config** — wartość `1`.
+2. **Start** — wartość `2`.
+
+Adres idzie jako 2 bajty, wartość jako 4 bajty:
+
+```c
+// Komenda START (2) do rejestru 0x0100
 uint8_t cmd_start[6] = {
-    0x01, 0x00, // Adres rejestru 0x0100
-    0x00, 0x00, 0x00, 0x02  // Wartość (4 bajty)
-}; 
+    0x01, 0x00,             // adres rejestru 0x0100
+    0x00, 0x00, 0x00, 0x02  // wartość (4 bajty, big-endian)
+};
 i2c_master_write_to_device(I2C_NUM_0, 0x52, cmd_start, 6, 1000);
-Odczyt wynikówPo wystartowaniu, pytasz radar o rejestr 0x0010 i czytasz 8 bajtów z rzędu (4 bajty obecności + 4 bajty odległości).💻 6. Środowisko ESP-IDF (ESP32-C6)KonfiguracjaW każdym nowym oknie terminala musisz aktywować ścieżki do narzędzi Espressif:Bash. $HOME/main/tools/esp-idf/export.sh
-Zanim zaczniesz budować, musisz powiedzieć CMake'owi, że używasz procesora RISC-V (C6):Bashcd ~/main/projects/radar_esp/i2c_check
-idf.py set-target esp32c6
-Budowanie i WgrywanieAby uniknąć poszukiwań portu przez system, używaj flagi -p z adresem portu (zazwyczaj /dev/ttyACM0):Bashidf.py -p /dev/ttyACM0 build flash monitor
-Aby wyjść z monitora, użyj skrótu: Ctrl + ].🚨 7. Rozwiązywanie problemów (Troubleshooting)1. Permission denied na porcie /dev/ttyACM0:Brak uprawnień w systemie Linux. Nadaj je ręcznie:sudo chmod 666 /dev/ttyACM02. Błędy kompilacji (Unknown CMake command / Parse error):System budowania ESP-IDF został wywołany z niewłaściwego katalogu.Zawsze uruchamiaj idf.py z "korzenia" projektu (tam gdzie jest główny CMakeLists.txt), a nie z folderu main/.W razie kryzysu: rm -rf build/ i zacznij kompilację od nowa.3. I2C wyrzuca same zera (00 00 00 00):STM32 śpi. Upewnij się, że pin WAKE_UP na module jest fizycznie połączony z 3.3V na ESP32.4. Dziwne wartości odległości (np. 4008635904 mm) lub brak reakcji na ruch:Radar ma zasiloną elektronikę, ale antena nie wystartowała (Pamięć zwraca śmieci).Sprawdź, czy na pewno wysłałeś komendę START (2) do rejestru 0x0100.Jeśli wysłałeś np. 3 – kazałeś mu się zatrzymać (Stop Detector).
-3. Wgrywanie Firmware'u na Radar (STM32)
+```
 
-Aby układ STM32 na radarze działał jako serwer I2C "Presence Detector", musisz go najpierw sflashować.
-Tryb Bootloadera (Hardware)
+### Odczyt wyników
 
-Zanim spróbujesz wgrać soft, musisz wprowadzić moduł w tryb pobierania:
+Po starcie pytamy o rejestr `0x0010` i czytamy **16 bajtów** z rzędu — cztery
+kolejne u32 big-endian:
 
-    Wciśnij i trzymaj przycisk BOOT.
+| Bajty | Pole            | Znaczenie                                                  |
+| :---- | :-------------- | :--------------------------------------------------------- |
+| 0–3   | `presence_reg`  | bit 0 = obecność; **górne 16 bitów = temperatura chipa**   |
+| 4–7   | `distance_mm`   | wykryta odległość [mm]                                     |
+| 8–11  | `intra_score`   | energia ruchu szybkiego (mikro-ruch / dynamika)            |
+| 12–15 | `inter_score`   | energia ruchu wolnego (makro-ruch / obecność statyczna)    |
 
-    Kliknij raz przycisk RST (Reset).
+---
 
-    Puść przycisk BOOT.
+## 💻 5. Budowanie i wgrywanie na ESP32-C6
 
-Flashowanie przez aplikację
+W **każdym nowym terminalu** najpierw aktywuj ESP-IDF:
 
-    Uruchom narzędzie: python -m acconeer.exptool.app
-
-    Przejdź do zakładki Flash.
-
-    Wybierz port (np. /dev/ttyACM0). Użyj opcji "Show all devices" jeśli lista jest pusta.
-
-    Wgraj plik z firmware (np. i2c_presence_detector).
-
-📊 4. Test Radaru na PC (Opcjonalnie)
-
-Zanim przejdziesz do ESP32, warto sprawdzić, czy radar widzi obiekty:
-
-    Zmień port: Układ CH342 tworzy dwa porty (np. ACM0 i ACM1). Do odczytu danych użyj drugiego portu.
-
-    Zmień Baudrate: Ustaw na 921600 (inaczej aplikacja zgłosi błąd timeoutu).
-
-    Zresetuj moduł (kliknij RST).
-
-    Połącz się, wybierz konfigurację i kliknij Start Measurement.
-5. Protokół I2C: Jak komunikować się z radarem?
-
-Moduł działa jako "Slave" pod adresem I2C 0x52. Posiada własną, specyficzną architekturę rejestrów:
-
-    Adresy rejestrów są 16-bitowe (2 bajty).
-
-    Dane w rejestrach są 32-bitowe (4 bajty). Zawsze musisz odczytać lub zapisać równe 4 bajty.
-
-Najważniejsze adresy (Rejestry)
-Adres (Dec)	Adres (Hex)	Nazwa	Typ	Opis
-0	0x0000	Wersja	R	Wersja firmware. Jeśli wczytujesz tu zera, WAKE_UP nie jest podłączony.
-3	0x0003	Status	R	Status detektora (0xFF oznacza gotowość, ale brak startu).
-16	0x0010	Obecność	R	Wynik detekcji (Bit 0 określa ruch: 1=Ruch, 0=Pusto).
-17	0x0011	Odległość	R	Wykryta odległość w milimetrach.
-256	0x0100	Komendy	W	Rejestr sterujący stanem radaru.
-Procedura Startowa (Init Sequence)
-
-Radar po podłączeniu zasilania nie wykonuje pomiarów. Czeka na instrukcje. Aby wystartował, musisz wysłać dwie komendy pod adres 0x0100:
-
-    Zastosuj konfigurację (Apply): Wyślij wartość 1.
-
-    Start pomiarów (Start): Wyślij wartość 2.
-
-Przykład wysłania komendy I2C w ESP-IDF:
-Adres wysyłamy jako 2 bajty, a komendę jako 4 bajty.
-C
-
-// Wysłanie komendy START (2) do rejestru 0x0100
-uint8_t cmd_start[6] = {
-    0x01, 0x00, // Adres rejestru 0x0100
-    0x00, 0x00, 0x00, 0x02  // Wartość (4 bajty)
-}; 
-i2c_master_write_to_device(I2C_NUM_0, 0x52, cmd_start, 6, 1000);
-
-Odczyt wyników
-
-Po wystartowaniu, pytasz radar o rejestr 0x0010 i czytasz 8 bajtów z rzędu (4 bajty obecności + 4 bajty odległości).
-💻 6. Środowisko ESP-IDF (ESP32-C6)
-Konfiguracja
-
-W każdym nowym oknie terminala musisz aktywować ścieżki do narzędzi Espressif:
-Bash
-
+```bash
 . $HOME/main/tools/esp-idf/export.sh
+```
 
-Zanim zaczniesz budować, musisz powiedzieć CMake'owi, że używasz procesora RISC-V (C6):
-Bash
+Build/flash/monitor uruchamiaj z **korzenia projektu** (tam, gdzie główny
+`CMakeLists.txt` — **nie** z `main/`):
 
-cd ~/main/projects/radar_esp/i2c_check
-idf.py set-target esp32c6
-
-Budowanie i Wgrywanie
-
-Aby uniknąć poszukiwań portu przez system, używaj flagi -p z adresem portu (zazwyczaj /dev/ttyACM0):
-Bash
-
+```bash
+idf.py set-target esp32c6                 # raz na świeży katalog build
 idf.py -p /dev/ttyACM0 build flash monitor
+```
 
-Aby wyjść z monitora, użyj skrótu: Ctrl + ].
-🚨 7. Rozwiązywanie problemów (Troubleshooting)
+Wyjście z monitora: `Ctrl + ]`.
 
-1. Permission denied na porcie /dev/ttyACM0:
-Brak uprawnień w systemie Linux. Nadaj je ręcznie:
+Jeśli po przebudowie / zmianie targetu sypią się błędy CMake — `rm -rf build/`
+i kompiluj od nowa.
+
+> Skrót: `./quickstart.sh` ubija zombie-brokery, startuje Mosquitto w nowym
+> oknie, ładuje ESP-IDF i otwiera dashboard.
+
+---
+
+## 📶 6. Pierwsze uruchomienie: Captive Portal
+
+Dane sieci i adres brokera **nie są** w kodzie — wpisujesz je przez portal.
+
+1. Jeśli NVS jest puste, urządzenie stawia otwarty hotspot **`Konfiguracja_Radaru`**
+   (SoftAP, `192.168.4.1`).
+2. Połącz się telefonem z tym hotspotem. Wbudowany serwer DNS kieruje cały ruch
+   na portal — na większości telefonów strona konfiguracji otworzy się sama.
+   Jeśli nie, wejdź w przeglądarce na `http://192.168.4.1`.
+3. Wpisz **SSID** i **hasło** swojej sieci Wi-Fi oraz **adres brokera MQTT**
+   (np. `mqtt://10.42.0.1:1883`). Dane lądują w NVS.
+4. Urządzenie restartuje się, łączy w trybie klienta (STA) i zaczyna publikować.
+
+### Reset konfiguracji
+
+Przytrzymaj **przycisk (GPIO9) ~3 s** — urządzenie potrójnie mrugnie LED-em
+i piknie buzzerem, skasuje zapisaną sieć/MQTT z NVS i zrestartuje się z powrotem
+do Captive Portalu. Reflash nie jest potrzebny.
+
+> Awaryjny adres brokera (gdy w NVS brak MQTT URI) to `mqtt://10.42.0.1:1883`,
+> zdefiniowany w `main/wifi_mqtt.c`.
+
+---
+
+## 🛰️ 7. Broker MQTT i dashboard
+
+### Broker (Mosquitto)
+
+Repo zawiera `mosquitto.conf`, który otwiera **1883 (MQTT)** i **9001
+(WebSockets)** — listener WebSocket jest wymagany, bo `dashboard/index.html`
+łączy się z brokerem prosto z przeglądarki przez `mqtt.min.js`.
+
+```bash
+mosquitto -c mosquitto.conf -v
+```
+
+Adres brokera musi być osiągalny dla ESP32 — domyślnie `10.42.0.1` (IP laptopa
+udostępniającego hotspot). Ten adres wpisujesz w portalu (pkt 6).
+
+### Dashboard
+
+Nie trzeba serwera HTTP — otwórz plik bezpośrednio:
+
+```bash
+firefox dashboard/index.html
+```
+
+### Format wiadomości
+
+Firmware publikuje na temat **`pokoj/101/radar`** JSON:
+
+```json
+{"obecnosc": 1, "odleglosc": 2310, "mikro": 1450, "makro": 220, "temp": 41, "alarm": "OK"}
+```
+
+(`mikro` = `inter_score`, `makro` = `intra_score`, `temp` = temperatura chipa °C,
+`alarm` = `OK` / `POZAR` / `UPADEK` / `ZASIEDZENIE`.)
+
+Publikacja jest dławiona do **raz na 2 s**, chyba że `alarm` ≠ `OK` — wtedy
+wiadomość leci natychmiast. Podgląd bez dashboardu:
+
+```bash
+mosquitto_sub -h 127.0.0.1 -t 'pokoj/101/radar' -v
+```
+
+---
+
+## 🎚️ 8. Kalibracja i logika alarmów
+
+Stałe w `main/main.c`:
+
+| Stała         | Domyślnie | Opis                                                                  |
+| :------------ | :-------- | :-------------------------------------------------------------------- |
+| `PODLOGA_MM`  | `2500`    | Odległość radaru od podłogi [mm] — używane przy detekcji upadku       |
+| `PROG_UPADKU` | `1500`    | Min. `intra_score` (dynamika ruchu), by uznać upadek                  |
+| `MAX_TEMP`    | `60`      | Próg temperatury chipa [°C] dla alarmu „POZAR”                        |
+
+Klasyfikator (pętla co 250 ms) ustawia jeden ze stanów:
+
+- **`POZAR`** — `temp > MAX_TEMP`.
+- **`UPADEK`** — `intra_score > PROG_UPADKU` **oraz** `distance_mm > PODLOGA_MM − 400`
+  (gwałtowny ruch przy podłodze).
+- **`ZASIEDZENIE`** — obecność z niskim `intra_score` i wysokim `inter_score`
+  utrzymująca się długo (licznik > 1200 pętli ≈ 5 min bez wyraźnego ruchu).
+- **`OK`** — pozostałe przypadki.
+
+---
+
+## 📁 9. Struktura projektu
+
+```
+presence_radar/
+├── main/
+│   ├── main.c            # app_main: I2C, pętla odczytu radaru, logika alarmów, MQTT
+│   ├── radar.c / .h      # warstwa I2C radaru XM125
+│   ├── wifi_mqtt.c / .h  # Wi-Fi (STA/SoftAP), NVS, klient MQTT, wybór trybu
+│   ├── captive_portal.c  # serwer HTTP portalu konfiguracji
+│   ├── dns_server.c / .h # DNS przekierowujący ruch na portal (192.168.4.1)
+│   └── CMakeLists.txt
+├── dashboard/
+│   ├── index.html        # panel pielęgniarki (MQTT-over-WebSockets)
+│   ├── mqtt.min.js
+│   └── chart.js.js
+├── hardware/             # materiały sprzętowe (radar_xm125_esp32c6)
+├── examples/             # standalone'y do bring-upu (nie wchodzą do builda)
+├── components/           # placeholdery pod przyszły refaktor (puste)
+├── mosquitto.conf        # broker: porty 1883 + 9001 (WebSockets)
+├── quickstart.sh         # skrót: broker + ESP-IDF + dashboard jednym poleceniem
+└── CMakeLists.txt        # top-level (uruchamiaj idf.py stąd)
+```
+
+> Stan: **działający prototyp** (Captive Portal + STA + MQTT + dashboard).
+> Plany rozwoju i znane ograniczenia są w [`TODO.md`](TODO.md).
+
+---
+
+## 🚨 10. Rozwiązywanie problemów (Troubleshooting)
+
+**1. `Permission denied` na `/dev/ttyACM0`**
+Brak uprawnień w systemie. Nadaj ręcznie:
+```bash
 sudo chmod 666 /dev/ttyACM0
+```
 
-2. Błędy kompilacji (Unknown CMake command / Parse error):
-System budowania ESP-IDF został wywołany z niewłaściwego katalogu.
+**2. Błędy kompilacji (`Unknown CMake command` / parse error)**
+`idf.py` odpalony z niewłaściwego katalogu. Uruchamiaj go z korzenia projektu
+(tam, gdzie główny `CMakeLists.txt`), nie z `main/`. W razie kryzysu:
+`rm -rf build/` i od nowa.
 
-    Zawsze uruchamiaj idf.py z "korzenia" projektu (tam gdzie jest główny CMakeLists.txt), a nie z folderu main/.
+**3. I2C zwraca same zera (`00 00 00 00`)**
+STM32 śpi. Upewnij się, że pin **WAKE_UP** modułu jest połączony z **3.3V** ESP32.
 
-    W razie kryzysu: rm -rf build/ i zacznij kompilację od nowa.
+**4. Dziwne odległości (np. `4008635904 mm`) lub brak reakcji na ruch**
+Elektronika zasilona, ale antena nie wystartowała (pamięć zwraca śmieci).
+Sprawdź, czy na pewno poszła komenda **START (`2`)** do `0x0100`. Jeśli wysłałeś
+`3` — kazałeś radarowi się zatrzymać (Stop Detector).
 
-3. I2C wyrzuca same zera (00 00 00 00):
-STM32 śpi. Upewnij się, że pin WAKE_UP na module jest fizycznie połączony z 3.3V na ESP32.
+**5. Telefon nie pokazuje strony konfiguracji**
+Połącz się z hotspotem `Konfiguracja_Radaru` i wejdź ręcznie na
+`http://192.168.4.1`. Jeśli urządzenie w ogóle nie stawia hotspotu — w NVS są
+już zapisane dane; zresetuj konfigurację (przytrzymaj przycisk ~3 s).
 
-4. Dziwne wartości odległości (np. 4008635904 mm) lub brak reakcji na ruch:
-Radar ma zasiloną elektronikę, ale antena nie wystartowała (Pamięć zwraca śmieci).
+**6. Brak publikacji MQTT mimo działającego radaru**
+MQTT jest blokowane do czasu pełnego połączenia z Wi-Fi (`wifi_ready`).
+Sprawdź log serialowy — jeśli widzisz pętlę „Rozłączono… próba ponownego
+połączenia”, hasło/SSID jest błędne (zresetuj konfigurację) albo broker jest
+nieosiągalny pod podanym adresem.
 
-    Sprawdź, czy na pewno wysłałeś komendę START (2) do rejestru 0x0100.
+---
 
-    Jeśli wysłałeś np. 3 – kazałeś mu się zatrzymać (Stop Detector).
-#linki
-	- https://www.waveshare.com/wiki/A121_Range_Sensor#Documents
-	- https://www.youtube.com/watch?v=Puh9MMC1Ft0
-	- https://docs.acconeer.com/en/latest/exploration_tool/index.html
-	- https://documentation.espressif.com/esp32-c6-wroom-1_wroom-1u_datasheet_en.html#pcb_layout_recommendations
-	- https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/i2c.html
+## 🔗 11. Linki
+
+- Waveshare A121 Range Sensor — https://www.waveshare.com/wiki/A121_Range_Sensor#Documents
+- Wideo poglądowe — https://www.youtube.com/watch?v=Puh9MMC1Ft0
+- Acconeer Exploration Tool — https://docs.acconeer.com/en/latest/exploration_tool/index.html
+- Datasheet ESP32-C6-WROOM-1 — https://documentation.espressif.com/esp32-c6-wroom-1_wroom-1u_datasheet_en.html#pcb_layout_recommendations
+- ESP-IDF I2C API — https://docs.espressif.com/projects/esp-idf/en/stable/api-reference/peripherals/i2c.html
