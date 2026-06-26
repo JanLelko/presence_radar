@@ -5,3 +5,14 @@ build/
 managed_components/
 dependencies.lock
 sdkconfig.old
+
+# KiCad — artefakty (autosave, backupy, cache, locki, ustawienia lokalne)
+*-backups/
+_autosave-*
+~*.lck
+\#auto_saved_files\#
+*.bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+fp-info-cache
+*.kicad_prl
