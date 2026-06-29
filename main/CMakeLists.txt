@@ -5,10 +5,12 @@ idf_component_register(
         "radar.c"
         "captive_portal.c"
         "dns_server.c"
+        "status_led.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         mqtt
         driver
+        led_strip
         esp_driver_gpio
         esp_wifi
         esp_event

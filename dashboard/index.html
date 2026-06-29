@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Centrum Monitoringu Seniorów</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
    <script src="mqtt.min.js"></script>
     <script src="chart.js.js"></script>
     
@@ -24,7 +27,7 @@
         * { box-sizing: border-box; transition: background-color 0.5s, color 0.5s; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             background-color: var(--bg-base); color: var(--text-main);
             margin: 0; padding: 20px; min-height: 100vh; position: relative; overflow-x: hidden;
             /* Dodana tranzycja dla płynnego przesuwania całej strony */
@@ -56,17 +59,33 @@
         input:checked + .slider:before { transform: translateX(20px); }
         input:checked + .slider.slider-alarm { background-color: rgba(255, 59, 48, 0.75); }
 
-        /* Baner alarmu (tekst ustawiany z JS — zależy od powodu) */
-        #alarm-banner {
-            display: none;
-            position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
-            background: var(--color-danger); color: #fff; text-align: center;
-            padding: 14px; font-weight: 800; letter-spacing: 0.5px;
-            box-shadow: 0 4px 20px rgba(255, 59, 48, 0.6);
-            animation: alarm-flash 0.7s infinite alternate;
+        /* Płynna czerwona poświata CAŁEGO tła, gdy którykolwiek pokój wyje.
+           Nakładka ponad ambient-bg (-1), pod treścią (main-container = 10). */
+        #danger-overlay {
+            position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background: radial-gradient(circle at 50% 0%,
+                        rgba(255, 59, 48, 0.30), rgba(255, 59, 48, 0.10) 55%, transparent 100%);
+            opacity: 0; transition: opacity 0.8s ease;
         }
-        body.alarm-active #alarm-banner { display: block; }
-        @keyframes alarm-flash { to { opacity: 0.45; } }
+        body.any-alarm #danger-overlay { opacity: 1; }
+
+        /* Karta, która AKTUALNIE wyje — mocna, ale płynna czerwień. */
+        .card.alarm-firing {
+            border: 2px solid var(--color-danger) !important;
+            background: rgba(255, 59, 48, 0.18) !important;
+            animation: firing-pulse 1.1s infinite alternate ease-in-out;
+        }
+        @keyframes firing-pulse {
+            from { box-shadow: 0 0 18px rgba(255, 59, 48, 0.35); }
+            to   { box-shadow: 0 0 45px rgba(255, 59, 48, 0.75); }
+        }
+
+        /* Wybrany pokój (źródło danych wykresu). */
+        .card.selected { outline: 2px solid rgba(0, 122, 255, 0.6); outline-offset: 2px; }
+
+        /* Przełącznik alarmu na karcie pokoju. */
+        .card-head { display: flex; justify-content: space-between; align-items: flex-start; }
+        .card-arm { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
 
         /* Karta czujnika bez łączności */
         .card.offline { opacity: 0.55; filter: grayscale(0.65); }
@@ -74,7 +93,8 @@
 
         #toggle-terminal {
             background: var(--glass-bg); color: var(--text-main); border: 1px solid var(--glass-border-top);
-            padding: 8px 16px; border-radius: 12px; cursor: pointer; font-family: monospace; font-weight: bold;
+            width: 42px; height: 42px; border-radius: 12px; cursor: pointer; font-family: monospace;
+            font-weight: bold; font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center;
             backdrop-filter: blur(10px);
         }
         #toggle-terminal:hover { background: rgba(0, 122, 255, 0.2); }
@@ -90,6 +110,9 @@
             border-top: 1px solid var(--glass-border-top); border-left: 1px solid var(--glass-border-top);
             border-right: 1px solid var(--glass-border-right); border-bottom: 1px solid var(--glass-border-right);
             border-radius: 20px; padding: 25px; box-shadow: var(--card-shadow);
+            /* Płynne przejście do stanu alarmowego (kolor + ramka + cień) */
+            transition: background-color 0.7s ease, border-color 0.7s ease, box-shadow 0.7s ease;
+            cursor: pointer;
         }
 
         .chart-section { width: 100%; height: 40vh; min-height: 300px; padding: 15px; }
@@ -133,11 +156,33 @@
         .log-entry { margin-bottom: 5px; word-wrap: break-word; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 3px;}
         .log-time { color: #888; }
         .log-topic { color: #f39c12; }
+
+        /* === Mini-wykresy (temperatura + dystans), chowane === */
+        #toggle-mini {
+            position: absolute; top: 10px; right: 14px; z-index: 3;
+            background: var(--glass-bg); color: var(--text-main);
+            border: 1px solid var(--glass-border-top); border-radius: 10px;
+            padding: 5px 12px; cursor: pointer; font-family: inherit;
+            font-size: 12px; font-weight: 600; backdrop-filter: blur(10px);
+        }
+        #toggle-mini:hover { background: rgba(0, 122, 255, 0.2); }
+
+        #mini-charts-card { display: none; }
+        #mini-charts-card.open { display: block; }
+        .mini-charts {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+        }
+        @media (max-width: 700px) { .mini-charts { grid-template-columns: 1fr; } }
+        .mini-chart { height: 22vh; min-height: 180px; position: relative; }
+        .mini-chart-title {
+            font-size: 12px; font-weight: 600; color: var(--text-muted);
+            text-transform: uppercase; margin-bottom: 6px;
+        }
     </style>
 </head>
 <body>
 
-    <div id="alarm-banner"></div>
+    <div id="danger-overlay"></div>
 
     <div class="ambient-bg">
         <div class="blob blob-1"></div><div class="blob blob-2"></div><div class="blob blob-3"></div>
@@ -146,13 +191,8 @@
     <div class="header">
         <h1>Centrum Monitoringu</h1>
         <div class="top-controls">
-            <button id="toggle-terminal">Terminal</button>
+            <button id="toggle-terminal" title="Terminal" aria-label="Terminal">&gt;_</button>
             <div class="theme-switch-wrapper">
-                <span>Alarm</span>
-                <label class="switch"><input type="checkbox" id="toggleAlarm"><span class="slider slider-alarm"></span></label>
-            </div>
-            <div class="theme-switch-wrapper">
-                <span>Dark Mode</span>
                 <label class="switch"><input type="checkbox" id="toggleTheme"><span class="slider"></span></label>
             </div>
         </div>
@@ -161,8 +201,23 @@
     <div class="main-container">
         <div class="grid" id="rooms-grid"></div>
 
-        <div class="card chart-section">
+        <div class="card chart-section" style="position: relative;">
+            <div id="chart-title" style="position: absolute; top: 12px; left: 20px; z-index: 2; font-weight: 600; font-size: 14px;">Kliknij pokój, aby zobaczyć wykres ruchu</div>
+            <button id="toggle-mini" title="Pokaż/ukryj temperaturę i dystans">＋ temp / dystans</button>
             <canvas id="radarLiveChart"></canvas>
+        </div>
+
+        <div class="card" id="mini-charts-card">
+            <div class="mini-charts">
+                <div>
+                    <div class="mini-chart-title">Temperatura czujnika (°C)</div>
+                    <div class="mini-chart"><canvas id="tempChart"></canvas></div>
+                </div>
+                <div>
+                    <div class="mini-chart-title">Dystans (mm)</div>
+                    <div class="mini-chart"><canvas id="distChart"></canvas></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -195,12 +250,87 @@
             }
         });
 
+        // Etykieta czasu w formacie 24h (bez AM/PM, niezależnie od locale).
+        function timeLabel() {
+            return new Date().toLocaleTimeString('pl-PL', { hour12: false });
+        }
+
+        // Mini-wykresy: temperatura i dystans dla wybranego pokoju (chowane).
+        function makeMiniChart(canvasId, label, color) {
+            return new Chart(document.getElementById(canvasId).getContext('2d'), {
+                type: 'line',
+                data: { labels: [], datasets: [
+                    { label, borderColor: color, backgroundColor: color + '22', data: [], tension: 0.4, fill: true, pointRadius: 1 }
+                ]},
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+                    scales: {
+                        y: { grid: { color: 'rgba(100,100,100,0.1)' }, ticks: { color: '#6e6e73' } },
+                        x: { grid: { display: false }, ticks: { color: '#6e6e73', maxTicksLimit: 6 } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+        const tempChart = makeMiniChart('tempChart', 'Temperatura (°C)', '#ff9f40');
+        const distChart = makeMiniChart('distChart', 'Dystans (mm)', '#9966ff');
+
         // 2. Funkcja do płynnej zmiany kolorów wykresu
         function updateChartColors(mainColor, mutedColor) {
-            liveChart.options.scales.x.ticks.color = mutedColor;
-            liveChart.options.scales.y.ticks.color = mutedColor;
-            liveChart.options.plugins.legend.labels.color = mainColor;
+            for (const ch of [liveChart, tempChart, distChart]) {
+                ch.options.scales.x.ticks.color = mutedColor;
+                ch.options.scales.y.ticks.color = mutedColor;
+                if (ch.options.plugins.legend.display !== false)
+                    ch.options.plugins.legend.labels.color = mainColor;
+                ch.update();
+            }
+        }
+
+        // === Historia ruchu per-pokój + wybór pokoju na wykresie ===
+        const roomHistory = {};   // pokój -> {labels:[], micro:[], macro:[], temp:[], dist:[]}
+        let selectedRoom = null;  // który pokój pokazuje wykres
+        let miniVisible = false;  // czy mini-wykresy (temp/dystans) są widoczne
+        const EMPTY_HIST = () => ({ labels: [], micro: [], macro: [], temp: [], dist: [] });
+
+        function pushHistory(room, data) {
+            if (!roomHistory[room]) roomHistory[room] = EMPTY_HIST();
+            const h = roomHistory[room];
+            h.labels.push(timeLabel());
+            h.micro.push(data.mikro);
+            h.macro.push(data.makro);
+            h.temp.push(data.temp ?? 0);
+            h.dist.push(data.odleglosc ?? 0);
+            if (h.labels.length > 30) {
+                h.labels.shift(); h.micro.shift(); h.macro.shift(); h.temp.shift(); h.dist.shift();
+            }
+        }
+
+        function renderChart(room) {
+            const h = roomHistory[room] || EMPTY_HIST();
+            liveChart.data.labels = h.labels.slice();
+            liveChart.data.datasets[0].data = h.micro.slice();
+            liveChart.data.datasets[1].data = h.macro.slice();
             liveChart.update();
+            if (miniVisible) renderMiniCharts(room);
+        }
+
+        function renderMiniCharts(room) {
+            const h = roomHistory[room] || EMPTY_HIST();
+            tempChart.data.labels = h.labels.slice();
+            tempChart.data.datasets[0].data = h.temp.slice();
+            tempChart.update();
+            distChart.data.labels = h.labels.slice();
+            distChart.data.datasets[0].data = h.dist.slice();
+            distChart.update();
+        }
+
+        function selectRoom(room) {
+            selectedRoom = room;
+            document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
+            const card = document.getElementById('room-' + room);
+            if (card) card.classList.add('selected');
+            document.getElementById('chart-title').innerText = 'Pokój ' + room + ' — ruch na żywo';
+            renderChart(room);
         }
 
         // 3. Obsługa Motywu i terminala
@@ -215,18 +345,43 @@
             }
         });
 
+        // Pokaż/ukryj mini-wykresy temperatury i dystansu (domyślnie ukryte).
+        const miniCard = document.getElementById('mini-charts-card');
+        document.getElementById('toggle-mini').addEventListener('click', e => {
+            e.stopPropagation();
+            miniVisible = !miniVisible;
+            miniCard.classList.toggle('open', miniVisible);
+            e.target.textContent = (miniVisible ? '－' : '＋') + ' temp / dystans';
+            if (miniVisible) {
+                // Wykresy powstały w kontenerze display:none — po odsłonięciu
+                // wymuszamy resize, inaczej Chart.js potrafi wstać z zerową
+                // wysokością do pierwszego zdarzenia ResizeObservera.
+                tempChart.resize();
+                distChart.resize();
+                if (selectedRoom !== null) renderMiniCharts(selectedRoom);
+            }
+        });
+
         // ==========================================
-        // Alarm: brak obecności LUB utrata łączności (switch w panelu)
+        // Alarm PER-POKÓJ (switch na karcie). Wyzwala: UPADEK / POŻAR /
+        // brak obecności / utrata łączności. ZASIEDZENIE NIE wyje.
         // ==========================================
-        let alarmArmed = false;        // czy alarm jest uzbrojony
-        let alarmFiring = false;       // czy aktualnie wyje
         let brokerConnected = false;   // czy mamy łączność z brokerem
         const OFFLINE_TIMEOUT = 10000; // brak wiadomości > 10 s = czujnik offline
         const ABSENCE_GRACE   = 1500;  // ile ms pustki zanim uznamy "brak obecności"
         const lastSeen = {};           // pokój -> czas ostatniej wiadomości
         const absentSince = {};        // pokój -> odkąd pusto (null gdy obecność)
+        const lastAlarmState = {};     // pokój -> ostatni data.alarm (OK/UPADEK/...)
+        const armedRooms = {};         // pokój -> czy alarm uzbrojony
+        const firingReason = {};       // pokój -> powód wycia (null gdy cisza)
         let audioCtx = null;
         let beepInterval = null;
+
+        function ensureAudio() {
+            // Odblokowanie dźwięku w przeglądarce (polityka autoplay) — przy geście.
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
 
         function beep() {
             if (!audioCtx) return;
@@ -240,53 +395,52 @@
             osc.stop(audioCtx.currentTime + 0.25);
         }
 
-        function startAlarm(reason) {
-            document.getElementById('alarm-banner').innerText = reason;
-            if (alarmFiring) return;   // już wyje — tylko zaktualizuj powód na banerze
-            alarmFiring = true;
-            document.body.classList.add('alarm-active');
-            appendLog('ALARM', reason);
-            beep();
-            beepInterval = setInterval(beep, 700);
+        // Publikacja uzbrojenia/rozbrojenia do radaru (retained = wspólny stan).
+        function publishArm(room, armed) {
+            if (client && client.connected) {
+                client.publish('pokoj/' + room + '/cmd', JSON.stringify({ armed }), { retain: true });
+            }
         }
 
-        function stopAlarm() {
-            if (!alarmFiring) return;
-            alarmFiring = false;
-            document.body.classList.remove('alarm-active');
-            if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+        function anyFiring() {
+            return Object.values(firingReason).some(r => r);
         }
 
-        // Jedno miejsce decyzyjne: czy alarm ma wyć i z jakiego powodu.
-        function refreshAlarmState() {
-            if (!alarmArmed) { stopAlarm(); return; }
+        function updateSound() {
+            if (anyFiring()) {
+                if (!beepInterval) { beep(); beepInterval = setInterval(beep, 700); }
+            } else if (beepInterval) {
+                clearInterval(beepInterval); beepInterval = null;
+            }
+        }
+
+        // Czy dany pokój ma wyć i z jakiego powodu (null = cisza).
+        function roomAlarmReason(room) {
+            if (!armedRooms[room]) return null;
             const now = Date.now();
-            const rooms = Object.keys(lastSeen);
-
-            // 1) utrata łączności — priorytet (broker padł albo czujnik milczy)
-            if (!brokerConnected) {
-                startAlarm('⚠  ALARM — UTRACONO POŁĄCZENIE Z BROKEREM'); return;
-            }
-            if (rooms.some(r => now - lastSeen[r] > OFFLINE_TIMEOUT)) {
-                startAlarm('⚠  ALARM — UTRACONO ŁĄCZNOŚĆ Z CZUJNIKIEM'); return;
-            }
-            // 2) brak obecności (z krótką karencją na mrugnięcia radaru)
-            if (rooms.some(r => absentSince[r] && now - absentSince[r] > ABSENCE_GRACE)) {
-                startAlarm('⚠  ALARM — BRAK OBECNOŚCI POD CZUJNIKIEM'); return;
-            }
-            // wszystko OK
-            stopAlarm();
+            if (!brokerConnected) return 'UTRATA POŁĄCZENIA Z BROKEREM';
+            if (now - (lastSeen[room] || 0) > OFFLINE_TIMEOUT) return 'UTRATA ŁĄCZNOŚCI Z CZUJNIKIEM';
+            const a = lastAlarmState[room];
+            if (a === 'UPADEK') return 'UPADEK';
+            if (a === 'POZAR')  return 'POŻAR';
+            if (absentSince[room] && now - absentSince[room] > ABSENCE_GRACE) return 'BRAK OBECNOŚCI';
+            return null;   // ZASIEDZENIE / OK nie wyją
         }
 
-        const alarmSwitch = document.getElementById('toggleAlarm');
-        alarmSwitch.addEventListener('change', e => {
-            alarmArmed = e.target.checked;
-            // Pierwszy klik odblokowuje dźwięk w przeglądarce (polityka autoplay).
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            appendLog('SYSTEM', alarmArmed ? 'Alarm UZBROJONY (brak obecności lub utrata łączności)' : 'Alarm rozbrojony');
-            refreshAlarmState();
-        });
+        // Przelicza stan alarmu dla wszystkich znanych pokoi.
+        function refreshAlarmState() {
+            const rooms = new Set([...Object.keys(lastSeen), ...Object.keys(armedRooms)]);
+            for (const room of rooms) {
+                const reason = roomAlarmReason(room);
+                const wasFiring = !!firingReason[room];
+                firingReason[room] = reason;
+                if (reason && !wasFiring) appendLog('ALARM', `Pokój ${room}: ${reason}`);
+                const card = document.getElementById('room-' + room);
+                if (card) card.classList.toggle('alarm-firing', !!reason);
+            }
+            document.body.classList.toggle('any-alarm', anyFiring());
+            updateSound();
+        }
 
         // Oznacza/zdejmuje stan OFFLINE na karcie pokoju.
         function setRoomOffline(room, off) {
@@ -309,12 +463,21 @@
         }
 
         // Watchdog: oznacza karty jako OFFLINE i co sekundę odświeża stan alarmu.
+        // Dodatkowo: gdy czujnik jest offline, dopisujemy do jego historii próbkę
+        // ZEROWĄ — wykres jedzie dalej (przewija się), ale leży na zerze, więc od
+        // razu widać, że czujnik milczy, a nie że wykres się zawiesił.
         setInterval(() => {
             const now = Date.now();
+            let selectedPushed = false;
             for (const room of Object.keys(lastSeen)) {
                 const stale = !brokerConnected || (now - lastSeen[room] > OFFLINE_TIMEOUT);
                 setRoomOffline(room, stale);
+                if (stale) {
+                    pushHistory(room, { mikro: 0, makro: 0, temp: 0, odleglosc: 0 });
+                    if (room === selectedRoom) selectedPushed = true;
+                }
             }
+            if (selectedPushed) renderChart(selectedRoom);
             refreshAlarmState();
         }, 1000);
 
@@ -336,7 +499,7 @@
         // 4. Dodawanie wpisu do logów
         function appendLog(topic, message) {
             const logsDiv = document.getElementById('logs');
-            const time = new Date().toLocaleTimeString();
+            const time = timeLabel();
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-topic">${topic}</span><br>${message}`;
@@ -352,7 +515,13 @@
             if (!card) {
                 const cardHTML = `
                     <div class="card" id="room-${room}">
-                        <div class="room-number">Pokój ${room}</div>
+                        <div class="card-head">
+                            <div class="room-number">Pokój ${room}</div>
+                            <label class="card-arm" title="Uzbrój alarm dla tego pokoju">
+                                Alarm
+                                <span class="switch"><input type="checkbox" id="arm-${room}"><span class="slider slider-alarm"></span></span>
+                            </label>
+                        </div>
                         <div class="patient-name" contenteditable="true" spellcheck="false">Wpisz Imię</div>
                         <br>
                         <div class="status-badge" id="status-${room}">W NORMIE</div>
@@ -370,13 +539,35 @@
                 `;
                 grid.insertAdjacentHTML('beforeend', cardHTML);
                 card = document.getElementById('room-' + room);
+
+                // Klik w kartę -> wybór pokoju do wykresu.
+                card.addEventListener('click', () => selectRoom(room));
+                // Klik w switch i w pole imienia nie ma wybierać/propagować.
+                card.querySelector('.card-arm').addEventListener('click', e => e.stopPropagation());
+                card.querySelector('.patient-name').addEventListener('click', e => e.stopPropagation());
+
+                // Przełącznik alarmu na karcie.
+                const armInput = document.getElementById('arm-' + room);
+                armInput.checked = !!armedRooms[room];
+                armInput.addEventListener('change', e => {
+                    armedRooms[room] = e.target.checked;
+                    ensureAudio();
+                    publishArm(room, e.target.checked);
+                    appendLog('SYSTEM', `Pokój ${room}: alarm ${e.target.checked ? 'UZBROJONY' : 'rozbrojony'}`);
+                    refreshAlarmState();
+                });
+
+                // Domyślnie pierwszy pojawiony pokój trafia na wykres.
+                if (selectedRoom === null) selectRoom(room);
             }
 
             const badge = document.getElementById('status-' + room);
             document.getElementById('micro-' + room).innerText = data.mikro;
             document.getElementById('presence-' + room).innerText = data.obecnosc === 1 ? "TAK" : "NIE";
 
-            card.className = 'card'; 
+            // Zostawiamy 'card', 'offline', 'alarm-firing', 'selected' —
+            // czyścimy tylko kolorowanie wynikające z data.alarm.
+            card.classList.remove('alarm-upadek', 'alarm-pozar', 'alarm-bezdech');
             if (data.alarm === "OK") {
                 badge.innerText = "W NORMIE"; badge.style.backgroundColor = 'var(--color-ok)';
             } else if (data.alarm === "UPADEK") {
@@ -397,6 +588,7 @@
             brokerConnected = true;
             appendLog('SYSTEM', 'Połączono z serwerem MQTT! Nasłuchuję...');
             client.subscribe('pokoj/+/radar');
+            client.subscribe('pokoj/+/cmd');   // stan uzbrojenia (retained, też z radaru)
             refreshAlarmState();
         });
 
@@ -423,31 +615,35 @@
             try {
                 const data = JSON.parse(rawMsg);
                 const topicParts = topic.split('/');
-                if(topicParts.length >= 2) {
-                    const roomNumber = topicParts[1];
-                    createOrUpdateRoom(roomNumber, data);
+                if (topicParts.length < 3) return;
+                const roomNumber = topicParts[1];
+                const kind = topicParts[2];
 
-                    // Ewidencja na potrzeby alarmu: czas ostatniej wiadomości + obecność
-                    lastSeen[roomNumber] = Date.now();
-                    if (data.obecnosc === 0) {
-                        if (!absentSince[roomNumber]) absentSince[roomNumber] = Date.now();
-                    } else {
-                        absentSince[roomNumber] = null;
-                    }
+                // Polecenie (retained) — z panelu lub z radaru: synchronizuj switch.
+                if (kind === 'cmd') {
+                    armedRooms[roomNumber] = !!data.armed;
+                    const inp = document.getElementById('arm-' + roomNumber);
+                    if (inp) inp.checked = !!data.armed;
                     refreshAlarmState();
-                    
-                    const now = new Date().toLocaleTimeString();
-                    liveChart.data.labels.push(now);
-                    liveChart.data.datasets[0].data.push(data.mikro);
-                    liveChart.data.datasets[1].data.push(data.makro);
-
-                    if (liveChart.data.labels.length > 30) {
-                        liveChart.data.labels.shift();
-                        liveChart.data.datasets[0].data.shift();
-                        liveChart.data.datasets[1].data.shift();
-                    }
-                    liveChart.update();
+                    return;
                 }
+
+                // Pomiar z radaru.
+                createOrUpdateRoom(roomNumber, data);
+                lastAlarmState[roomNumber] = data.alarm;
+
+                // Ewidencja na potrzeby alarmu: czas ostatniej wiadomości + obecność
+                lastSeen[roomNumber] = Date.now();
+                if (data.obecnosc === 0) {
+                    if (!absentSince[roomNumber]) absentSince[roomNumber] = Date.now();
+                } else {
+                    absentSince[roomNumber] = null;
+                }
+                refreshAlarmState();
+
+                // Bufor historii dla każdego pokoju; rysujemy tylko wybrany.
+                pushHistory(roomNumber, data);
+                if (roomNumber === selectedRoom) renderChart(selectedRoom);
             } catch (e) {
                 console.error("Błąd parsowania JSON:", e);
             }

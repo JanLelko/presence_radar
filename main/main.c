@@ -15,6 +15,7 @@
 // ================= USTAWIENIA WI-FI i MQTT =================
 #include "mqtt_client.h" // Żeby plik wiedział, czym w ogóle jest ten typ danych
 #include "wifi_mqtt.h"
+#include "status_led.h" // Sygnalizacja stanu na wbudowanym LED RGB (GPIO8)
 #define MQTT_TOPIC "pokoj/101/radar"
 
 // ================= USTAWIENIA RADARU ======================
@@ -31,7 +32,11 @@
 
 const uint32_t PODLOGA_MM = 2500;
 const uint32_t PROG_UPADKU = 1500;
-const uint16_t MAX_TEMP = 60;
+// Próg POŻARU: alarm leci, gdy chip_temp > MAX_TEMP. Ustawione nisko (20),
+// żeby dało się go wyzwolić chuchnięciem na czujnik (~21 °C i wyżej).
+// UWAGA demonstracyjna: jeśli w spoczynku temp na wykresie pokazuje już ≥21,
+// pożar będzie wisiał na stałe — podnieś tę wartość ~2-3 °C nad odczyt spoczynkowy.
+const uint16_t MAX_TEMP = 20;
 // ==========================================================
 
 static const char *TAG = "RADAR_IOT";
@@ -63,6 +68,9 @@ static void kasuj_konfiguracje(void) {
 void app_main(void) {
     ESP_LOGI(TAG, "Start systemu...");
 
+    // Sygnalizacja RGB (GPIO8): autotest R->G->B + zadanie statusu.
+    status_led_init();
+
     // 1. Uruchamiamy sieć i serwer
     setup_wifi_esp_idf();
     setup_mqtt();
@@ -82,16 +90,18 @@ void app_main(void) {
     i2c_param_config(I2C_MASTER_NUM, &conf);
     i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
 
-    // --- TEST PERYFERIÓW: LED + Buzzer wyzwalane przyciskiem ---
+    // --- BUZZER wyzwalany alarmem ---
+    // Uwaga: dioda na PCB (PIN_LED, GPIO18) jest od teraz konfigurowana i
+    // sterowana przez status_led.c, żeby migała ZGODNIE z RGB. Tutaj
+    // konfigurujemy już tylko buzzer.
     gpio_config_t out_conf = {
-        .pin_bit_mask = (1ULL << PIN_LED) | (1ULL << PIN_BUZZER),
+        .pin_bit_mask = (1ULL << PIN_BUZZER),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&out_conf);
-    gpio_set_level(PIN_LED, 0);
     gpio_set_level(PIN_BUZZER, 0);
 
     // Przycisk: wejście z WEWNĘTRZNYM pull-upem (przycisk między GPIO9 a GND -> wciśnięty = 0)
@@ -117,6 +127,11 @@ void app_main(void) {
     uint32_t last_mqtt_send_time = 0;
     uint32_t button_hold = 0;   // ile pętli (po 250 ms) przycisk jest wciśnięty
 
+    // --- Stan lokalnego alarmu (buzzer/LED), sterowany nieblokująco w pętli ---
+    int alarm_tick = 0;                 // licznik 0..11 (cykl 12*250ms = 3 s)
+    uint32_t brak_obecnosci_licznik = 0;// ile pętli z rzędu nikogo nie ma
+    bool alarm_should = false;          // czy alarm ma teraz wyć
+
     // 4. Pętla Główna
     while(1) {
             // --- Przytrzymanie przycisku ~3 s -> reset konfiguracji i powrót do captive portal ---
@@ -124,11 +139,32 @@ void app_main(void) {
                 button_hold++;
                 if (button_hold >= 12) {             // 12 * 250 ms = 3 s
                     ESP_LOGW(TAG, "Reset konfiguracji - kasuję sieć i wracam do captive portal.");
+                    status_led_alarm(false);         // oddaj GPIO18, by task nie nadpisywał sygnału resetu
                     sygnal_resetu_3x();
                     kasuj_konfiguracje();
                     esp_restart();
                 }
             } else {
+                // Krótkie naciśnięcie (puszczony przed 3 s) = PRZEŁĄCZ uzbrojenie:
+                // uzbrojony -> rozbrój (wycisz), rozbrojony -> uzbrój ponownie.
+                // Stan publikujemy retained, żeby panel zsynchronizował switch
+                // (wspólne źródło prawdy = retained cmd).
+                if (button_hold > 0 && button_hold < 12) {
+                    bool new_armed = !alarm_armed;
+                    alarm_armed = new_armed;
+                    ESP_LOGI(TAG, "Przycisk: alarm %s.", new_armed ? "UZBROJONY" : "rozbrojony");
+                    if (!new_armed) {
+                        alarm_should = false;
+                        alarm_tick = 0;
+                        gpio_set_level(PIN_BUZZER, 0);
+                        gpio_set_level(PIN_LED, 0);
+                    }
+                    if (mqtt_client != NULL) {
+                        esp_mqtt_client_publish(mqtt_client, MQTT_CMD_TOPIC,
+                                                new_armed ? "{\"armed\":true}" : "{\"armed\":false}",
+                                                0, 1, 1);
+                    }
+                }
                 button_hold = 0;
             }
 
@@ -136,6 +172,7 @@ void app_main(void) {
             uint8_t data[16] = {0};
 
             esp_err_t err = i2c_master_write_read_device(I2C_MASTER_NUM, RADAR_ADDR, reg_addr, 2, data, 16, 100 / portTICK_PERIOD_MS);
+            status_led_radar_err(err != ESP_OK);   // fiolet na RGB gdy I2C milczy
 
         if (err == ESP_OK) {
                 uint32_t presence_reg = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
@@ -163,6 +200,18 @@ void app_main(void) {
                     czas_siedzenia = 0;
                 }
 
+                // --- DECYZJA O LOKALNYM ALARMIE (buzzer/LED) ---
+                // Karencja na brak obecności (~1.5 s), jak ABSENCE_GRACE w panelu.
+                if (!is_present) brak_obecnosci_licznik++;
+                else            brak_obecnosci_licznik = 0;
+                bool brak_obecnosci = (brak_obecnosci_licznik >= 6);
+
+                // ZASIEDZENIE świadomie NIE wyzwala alarmu (tylko koloruje kartę).
+                bool zdarzenie = (strcmp(stan_alarmowy, "UPADEK") == 0 ||
+                                  strcmp(stan_alarmowy, "POZAR")  == 0);
+                alarm_should = alarm_armed && (zdarzenie || brak_obecnosci);
+                status_led_alarm(alarm_should);   // czerwień na RGB gdy alarm wyje
+
                 // WYSYŁKA MQTT (Tylko co 2 sekundy, żeby nie zabić serwera, chyba że jest pożar/upadek)
                 uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
                 if (current_time - last_mqtt_send_time > 2000 || strcmp(stan_alarmowy, "OK") != 0) {
@@ -186,6 +235,18 @@ void app_main(void) {
 
                     last_mqtt_send_time = current_time;
                 }
+            }
+
+            // --- SYGNALIZACJA ALARMU (nieblokująca, na liczniku ticków) ---
+            // Cykl 3 s = 12 ticków po 250 ms: buzzer ON ticki 0..7 (2 s),
+            // OFF 8..11 (1 s). Miganie diody (GPIO18) obsługuje status_led.c
+            // w lockstep z RGB — tu sterujemy już tylko buzzerem.
+            if (alarm_should) {
+                alarm_tick = (alarm_tick + 1) % 12;
+                gpio_set_level(PIN_BUZZER, alarm_tick < 8 ? 1 : 0);
+            } else {
+                alarm_tick = 0;
+                gpio_set_level(PIN_BUZZER, 0);
             }
 
             vTaskDelay(pdMS_TO_TICKS(250)); // Szybkość odczytu z czujnika: 4x na sekundę

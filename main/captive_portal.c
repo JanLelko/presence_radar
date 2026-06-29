@@ -62,7 +62,6 @@ static const char *html_page =
     "<input type=\"text\" name=\"mqtt\" value=\"mqtt://10.42.0.1:1883\" required>"
     "<button type=\"submit\">Zapisz i uruchom</button>"
     "</form>"
-    "<p class=\"foot\">Radar XM125 &middot; ESP32-C6</p>"
     "</div></body></html>";
 
 

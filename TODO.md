@@ -23,6 +23,13 @@ Legenda ryzyka:
   osobna biała strona-potwierdzenie po zapisie.
 - **Sprzątanie (część pkt 6)** — usunięta martwa `wifi_event_handler` z `main.c`.
 - **`.gitignore` dla artefaktów KiCada** — autosave/backupy/cache/locki nie są już wersjonowane.
+- **Sygnalizacja RGB stanu (`status_led.c`)** — wbudowany WS2812 (GPIO8) pokazuje stan: portal/Wi-Fi/MQTT/alarm/błąd radaru.
+- **Synchronizacja migania diod** — dioda na PCB (GPIO18) miga teraz w lockstep z RGB (ta sama częstotliwość i faza);
+  GPIO18 przejęte przez `status_led.c`, w `main.c` została tylko obsługa buzzera.
+- **Dashboard: wykres jedzie na 0 przy offline** — watchdog dopisuje zerowe próbki, gdy czujnik milczy (zamiast zamrażać wykres).
+- **Dashboard: godzina 24h** — wspólny `timeLabel()` (`pl-PL`, bez AM/PM) na wykresie i w logach.
+- **Dashboard: chowane mini-wykresy temp + dystans** — osobne skale, domyślnie ukryte (przycisk `＋ temp / dystans`).
+- **Próg POŻARU demonstracyjny** — `MAX_TEMP` obniżone do 20 °C (wyzwalane chuchnięciem); do kalibracji wg odczytu spoczynkowego.
 
 ---
 

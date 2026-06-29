@@ -22,6 +22,19 @@ void setup_mqtt(void);
 // Globalna flaga statusu połączenia
 extern volatile bool wifi_ready;
 
+// Flagi stanu dla sygnalizacji RGB (status_led.c):
+extern volatile bool softap_mode;         // tryb konfiguracji (captive portal)
+extern volatile bool mqtt_connected;      // klient MQTT aktualnie połączony
+extern volatile bool mqtt_ever_connected; // czy MQTT połączył się choć raz
+
+/* Flaga uzbrojenia alarmu, sterowana z panelu przez retained-temat
+ * "pokoj/101/cmd" ({"armed":true|false}). Ustawiana w handlerze MQTT
+ * w wifi_mqtt.c, czytana przez pętlę alarmu w main.c. */
+extern volatile bool alarm_armed;
+
+/* Temat poleceń panel -> radar (subskrypcja + publikacja rozbrojenia). */
+#define MQTT_CMD_TOPIC "pokoj/101/cmd"
+
 
 
 

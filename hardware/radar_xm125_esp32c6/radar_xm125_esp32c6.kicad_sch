@@ -631,8 +631,8 @@
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "Q"
-				(at 5.08 1.27 0)
+			(property "Reference" "Q1"
+				(at 5.08 1.2701 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -640,8 +640,8 @@
 					(justify left)
 				)
 			)
-			(property "Value" "Q_NPN_EBC"
-				(at 5.08 -1.27 0)
+			(property "Value" "2N2222A331"
+				(at 5.08 -1.2699 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -649,7 +649,7 @@
 					(justify left)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "Package_TO_SOT_THT:TO-92_Inline"
 				(at 5.08 2.54 0)
 				(effects
 					(font
@@ -685,7 +685,7 @@
 					(hide yes)
 				)
 			)
-			(property "Sim.Pins" "1=E 2=B 3=C"
+			(property "Sim.Pins" "3=C 2=B 1=E"
 				(at 0 0 0)
 				(effects
 					(font
@@ -805,7 +805,7 @@
 							)
 						)
 					)
-					(number "3"
+					(number "1"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -823,7 +823,7 @@
 							)
 						)
 					)
-					(number "1"
+					(number "3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1189,8 +1189,8 @@
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "U"
-				(at 1.016 1.27 0)
+			(property "Reference" "U1"
+				(at 1.524 3.81 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -1198,14 +1198,14 @@
 				)
 			)
 			(property "Value" "ESP32_C6_WROOM_1_DEV"
-				(at 12.7 -44.704 0)
+				(at 12.192 1.524 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "moje_obudowy:ESP32_C6_Devkit"
 				(at 0 0 0)
 				(effects
 					(font
@@ -1501,7 +1501,7 @@
 				(pin power_out line
 					(at -5.08 -38.1 0)
 					(length 5.08)
-					(name "GND"
+					(name "G"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -2081,12 +2081,6 @@
 			(embedded_fonts no)
 		)
 	)
-	(junction
-		(at 128.27 36.83)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "eb8a7591-a311-4a9a-bcea-286f238da91f")
-	)
 	(wire
 		(pts
 			(xy 209.55 92.71) (xy 219.71 92.71)
@@ -2116,16 +2110,6 @@
 			(type default)
 		)
 		(uuid "117b2b5c-b84f-4a56-85ab-4618b68c43ee")
-	)
-	(wire
-		(pts
-			(xy 128.27 36.83) (xy 128.27 49.53)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "193b1d3d-ccfb-4532-9824-15c26c745760")
 	)
 	(wire
 		(pts
@@ -2179,16 +2163,6 @@
 	)
 	(wire
 		(pts
-			(xy 128.27 27.94) (xy 128.27 36.83)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "612ffa0c-5637-4579-b5ec-b27ea2987346")
-	)
-	(wire
-		(pts
 			(xy 104.14 82.55) (xy 115.57 82.55)
 		)
 		(stroke
@@ -2196,16 +2170,6 @@
 			(type default)
 		)
 		(uuid "6273e8c6-2f38-4534-bcb1-7ae987bcb73d")
-	)
-	(wire
-		(pts
-			(xy 140.97 36.83) (xy 146.05 36.83)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "63380251-fe5d-4f36-9f0f-c3a9d3b660cc")
 	)
 	(wire
 		(pts
@@ -2219,16 +2183,6 @@
 	)
 	(wire
 		(pts
-			(xy 140.97 49.53) (xy 146.05 49.53)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "7cb50caa-a6c4-47ed-81a1-f21613be816c")
-	)
-	(wire
-		(pts
 			(xy 177.8 133.35) (xy 187.96 133.35)
 		)
 		(stroke
@@ -2236,16 +2190,6 @@
 			(type default)
 		)
 		(uuid "810cd87b-80cf-4000-99bc-117da8c6b768")
-	)
-	(wire
-		(pts
-			(xy 128.27 49.53) (xy 133.35 49.53)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "85ae4540-fc32-4265-b39c-6ecb118f4f88")
 	)
 	(wire
 		(pts
@@ -2357,16 +2301,6 @@
 		)
 		(uuid "f0baf780-8415-4023-b9f6-a326e6049ffd")
 	)
-	(wire
-		(pts
-			(xy 128.27 36.83) (xy 133.35 36.83)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fff0fdef-8110-4d1a-b0b4-561329b0b5d5")
-	)
 	(label "SCL"
 		(at 115.57 85.09 180)
 		(effects
@@ -2386,16 +2320,6 @@
 			(justify left bottom)
 		)
 		(uuid "182f359a-01db-4c21-ad66-4bf0908b51c7")
-	)
-	(label "SDA"
-		(at 146.05 36.83 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "1cc48c13-f699-4b39-931b-4271ed0044e7")
 	)
 	(label "SDA"
 		(at 165.1 95.25 0)
@@ -2497,16 +2421,6 @@
 		)
 		(uuid "bfe04e22-eb18-4319-90f3-a34cb18a754d")
 	)
-	(label "SCL"
-		(at 146.05 49.53 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "eef2c641-df53-47d6-9f6d-bff02d1d4748")
-	)
 	(symbol
 		(lib_id "Switch:SW_Push")
 		(at 87.63 146.05 0)
@@ -2570,74 +2484,6 @@
 			(project "radar_xm125_esp32c6"
 				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
 					(reference "SW1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 137.16 49.53 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "0ab2f610-35a6-4bed-81fe-89abbd81a597")
-		(property "Reference" "R2"
-			(at 137.16 43.18 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "4.7K"
-			(at 137.16 45.72 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
-			(at 137.16 51.308 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 137.16 49.53 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Resistor"
-			(at 137.16 49.53 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "1ebc2ad9-5c99-48e3-ac6d-d3a32d2594d4")
-		)
-		(pin "1"
-			(uuid "bbc5e990-8a96-4796-8961-3605b27e6d28")
-		)
-		(instances
-			(project "radar_xm125_esp32c6"
-				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
-					(reference "R2")
 					(unit 1)
 				)
 			)
@@ -3075,74 +2921,6 @@
 			(project "radar_xm125_esp32c6"
 				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
 					(reference "#PWR08")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R")
-		(at 137.16 36.83 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "5c2e1126-d9ea-481d-886a-b0c1e5826ca9")
-		(property "Reference" "R1"
-			(at 137.16 30.48 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "4.7K"
-			(at 137.16 33.02 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
-			(at 137.16 38.608 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 137.16 36.83 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Resistor"
-			(at 137.16 36.83 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "4449ec6b-1932-4b00-b048-e0246f853d84")
-		)
-		(pin "1"
-			(uuid "6cfb041d-ba16-458c-b875-a29b86b2d06b")
-		)
-		(instances
-			(project "radar_xm125_esp32c6"
-				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
-					(reference "R1")
 					(unit 1)
 				)
 			)
@@ -3861,72 +3639,6 @@
 			(project "radar_xm125_esp32c6"
 				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
 					(reference "#PWR04")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+3.3V")
-		(at 128.27 27.94 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "d8297db1-6402-4e72-8719-390159c8df9b")
-		(property "Reference" "#PWR07"
-			(at 128.27 31.75 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+3.3V"
-			(at 128.27 22.86 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 128.27 27.94 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 128.27 27.94 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 128.27 27.94 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "8dd77300-fe0c-4ef8-b4da-1af616a35331")
-		)
-		(instances
-			(project "radar_xm125_esp32c6"
-				(path "/cb70011b-1083-4849-9075-eeb5efafcf64"
-					(reference "#PWR07")
 					(unit 1)
 				)
 			)

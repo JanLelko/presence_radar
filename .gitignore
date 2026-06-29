@@ -16,3 +16,6 @@ _autosave-*
 *.kicad_sch-bak
 fp-info-cache
 *.kicad_prl
+
+# Prywatne — nie wersjonować
+docs/prezentacja_biznesowa.md
