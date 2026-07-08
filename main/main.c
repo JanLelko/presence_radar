@@ -65,6 +65,77 @@ static void kasuj_konfiguracje(void) {
     }
 }
 
+// ================= OBSŁUGA PRZYCISKU (GPIO9) ==============
+// Przycisk NIE wisi na przerwaniu zewnętrznym: styk mechaniczny "dzwoni"
+// (kilka-kilkanaście zboczy na jedno naciśnięcie), więc ISR na zboczu
+// odpalałby się wielokrotnie. Zgodnie ze sztuką (Jack Ganssle, "A Guide to
+// Debouncing") przycisk próbkujemy okresowo i filtrujemy programowo.
+// Robimy to w osobnym tasku FreeRTOS, żeby reakcja (~30 ms) była niezależna
+// od 250 ms taktu pętli radaru.
+// UWAGA: tick FreeRTOS to 100 Hz (10 ms), więc BTN_SAMPLE_MS MUSI być
+// wielokrotnością 10 — inaczej pdMS_TO_TICKS() zaokrągli w dół (5 ms -> 0)
+// i task stałby się busy-loopem, a liczniki czasu by zwariowały. 20 ms =
+// 2 ticki i mieści się w zalecanym przez Ganssle'a oknie 20-50 ms.
+#define BTN_SAMPLE_MS    20     // okres próbkowania (= 2 ticki @100 Hz)
+#define BTN_DEBOUNCE_MS  40     // stan musi być stabilny tyle, by go uznać
+#define BTN_RESET_MS     3000   // przytrzymanie -> reset konfiguracji
+
+static void button_task(void *arg) {
+    bool stable = false;        // odfiltrowany stan (true = wciśnięty)
+    bool last_raw = false;      // poprzedni surowy odczyt
+    uint32_t stable_ms = 0;     // jak długo surowy odczyt się nie zmienia
+    uint32_t held_ms = 0;       // jak długo przycisk jest wciśnięty (po debounce)
+    bool reset_done = false;    // reset odpala raz na jedno przytrzymanie
+
+    while (1) {
+        bool raw = (gpio_get_level(PIN_BUTTON) == 0);   // wciśnięty = stan niski
+
+        // Filtr: stan uznajemy za pewny dopiero, gdy surowy odczyt nie zmienia
+        // się przez BTN_DEBOUNCE_MS.
+        if (raw != last_raw) {
+            last_raw = raw;
+            stable_ms = 0;
+        } else if (stable_ms < BTN_DEBOUNCE_MS) {
+            stable_ms += BTN_SAMPLE_MS;
+        }
+
+        if (stable_ms >= BTN_DEBOUNCE_MS && raw != stable) {
+            stable = raw;
+            if (stable) {               // świeże, pewne wciśnięcie
+                held_ms = 0;
+                reset_done = false;
+            } else if (!reset_done) {   // puszczenie przed 3 s = PRZEŁĄCZ alarm
+                bool new_armed = !alarm_armed;
+                alarm_armed = new_armed;
+                ESP_LOGI(TAG, "Przycisk: alarm %s.", new_armed ? "UZBROJONY" : "rozbrojony");
+                // Stan publikujemy retained, żeby panel zsynchronizował switch
+                // (wspólne źródło prawdy = retained cmd). Wyciszenie buzzera/LED
+                // zrobi pętla radaru w kolejnej iteracji (alarm_should=false).
+                if (mqtt_client != NULL) {
+                    esp_mqtt_client_publish(mqtt_client, MQTT_CMD_TOPIC,
+                                            new_armed ? "{\"armed\":true}" : "{\"armed\":false}",
+                                            0, 1, 1);
+                }
+            }
+        }
+
+        // Odliczanie przytrzymania -> reset konfiguracji i powrót do portalu.
+        if (stable) {
+            held_ms += BTN_SAMPLE_MS;
+            if (!reset_done && held_ms >= BTN_RESET_MS) {
+                reset_done = true;          // nie przełączaj alarmu po puszczeniu
+                ESP_LOGW(TAG, "Reset konfiguracji - kasuję sieć i wracam do captive portal.");
+                status_led_alarm(false);    // oddaj GPIO18, by task nie nadpisywał sygnału resetu
+                sygnal_resetu_3x();
+                kasuj_konfiguracje();
+                esp_restart();
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(BTN_SAMPLE_MS));
+    }
+}
+
 void app_main(void) {
     ESP_LOGI(TAG, "Start systemu...");
 
@@ -123,9 +194,11 @@ void app_main(void) {
     i2c_master_write_to_device(I2C_MASTER_NUM, RADAR_ADDR, cmd_start, 6, 1000 / portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "Radar uruchomiony. Wchodzę w pętlę.");
 
+    // Przycisk obsługuje osobny task (próbkowanie + debounce, niezależnie od pętli).
+    xTaskCreate(button_task, "button", 3072, NULL, 4, NULL);
+
     uint32_t czas_siedzenia = 0;
     uint32_t last_mqtt_send_time = 0;
-    uint32_t button_hold = 0;   // ile pętli (po 250 ms) przycisk jest wciśnięty
 
     // --- Stan lokalnego alarmu (buzzer/LED), sterowany nieblokująco w pętli ---
     int alarm_tick = 0;                 // licznik 0..11 (cykl 12*250ms = 3 s)
@@ -134,40 +207,6 @@ void app_main(void) {
 
     // 4. Pętla Główna
     while(1) {
-            // --- Przytrzymanie przycisku ~3 s -> reset konfiguracji i powrót do captive portal ---
-            if (gpio_get_level(PIN_BUTTON) == 0) {   // wciśnięty = stan niski
-                button_hold++;
-                if (button_hold >= 12) {             // 12 * 250 ms = 3 s
-                    ESP_LOGW(TAG, "Reset konfiguracji - kasuję sieć i wracam do captive portal.");
-                    status_led_alarm(false);         // oddaj GPIO18, by task nie nadpisywał sygnału resetu
-                    sygnal_resetu_3x();
-                    kasuj_konfiguracje();
-                    esp_restart();
-                }
-            } else {
-                // Krótkie naciśnięcie (puszczony przed 3 s) = PRZEŁĄCZ uzbrojenie:
-                // uzbrojony -> rozbrój (wycisz), rozbrojony -> uzbrój ponownie.
-                // Stan publikujemy retained, żeby panel zsynchronizował switch
-                // (wspólne źródło prawdy = retained cmd).
-                if (button_hold > 0 && button_hold < 12) {
-                    bool new_armed = !alarm_armed;
-                    alarm_armed = new_armed;
-                    ESP_LOGI(TAG, "Przycisk: alarm %s.", new_armed ? "UZBROJONY" : "rozbrojony");
-                    if (!new_armed) {
-                        alarm_should = false;
-                        alarm_tick = 0;
-                        gpio_set_level(PIN_BUZZER, 0);
-                        gpio_set_level(PIN_LED, 0);
-                    }
-                    if (mqtt_client != NULL) {
-                        esp_mqtt_client_publish(mqtt_client, MQTT_CMD_TOPIC,
-                                                new_armed ? "{\"armed\":true}" : "{\"armed\":false}",
-                                                0, 1, 1);
-                    }
-                }
-                button_hold = 0;
-            }
-
             uint8_t reg_addr[2] = {0x00, 0x10};
             uint8_t data[16] = {0};
 
