@@ -239,6 +239,10 @@ void app_main(void) {
                     // NOWY BLOK: Sprawdzamy bezpiecznik sieciowy!
                     if (wifi_ready) {
                         // JSON
+                        // UWAGA: nazwy pól są odwrócone względem semantyki radaru i tak
+                        // zostaje (dashboard to konsumuje) — "mikro" niesie inter_score
+                        // (ruch WOLNY), "makro" niesie intra_score (ruch SZYBKI). Rename
+                        // po obu stronach = osobny commit (patrz plan, faza telemetrii).
                         char payload[200];
                         sprintf(payload, "{\"obecnosc\": %d, \"odleglosc\": %lu, \"mikro\": %lu, \"makro\": %lu, \"temp\": %u, \"alarm\": \"%s\"}",
                                 is_present, distance_mm, inter_score, intra_score, chip_temp, stan_alarmowy);

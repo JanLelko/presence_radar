@@ -40,7 +40,8 @@ typedef struct {
     bool     had_errors;       /* jakikolwiek bit błędu (16..23, 28) */
     bool     verify_ok;        /* odczyt zwrotny wybranych rejestrów zgadza się z cfg */
     bool     measuring;        /* measure counter (0x0002) rośnie => detektor liczy */
-    char     status_str[160];  /* dekode detector_status: "RSS_REGISTER_OK|CONFIG_APPLY_OK|..." */
+    char     status_str[256];  /* dekode detector_status: "RSS_REGISTER_OK|CONFIG_APPLY_OK|..."
+                                * (mieści komplet flag *_OK + *_ERROR + BUSY naraz) */
 } radar_apply_result_t;
 
 /* Konfiguruje magistralę I2C0 jako master: SDA=PIN_I2C_SDA, SCL=PIN_I2C_SCL,
@@ -58,7 +59,8 @@ esp_err_t radar_init(void);
  * NIE brickuje: błąd statusu / niezgodność odczytu zwrotnego są logowane
  * GŁOŚNO, ale funkcja i tak kończy w STARCIE. Zwraca ESP_OK, jeśli magistrala
  * I2C żyła; ESP_ERR_* tylko przy twardej awarii I2C lub gdy moduł nie wstał po
- * resecie. `cfg` jest kopiowane; `out` może być NULL. */
+ * resecie. `cfg` jest tylko odczytywane (przez wskaźnik, bez kopii) — musi żyć
+ * do powrotu z funkcji. `out` może być NULL. */
 esp_err_t radar_apply_config(const radar_cfg_t *cfg, radar_apply_result_t *out);
 
 /* Odczytuje 16 bajtów z rejestru 0x0010 i wypełnia radar_frame_t.

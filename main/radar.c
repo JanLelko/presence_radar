@@ -45,14 +45,16 @@
 #define BUSY_TMO_START_MS   2000
 #define BUSY_POLL_MS        20
 
-/* Ile czekać, aż moduł odpowie po RESET_MODULE (NAK-uje póki STM32 się nie podniesie). */
+/* RESET_MODULE: ile odczekać zanim zaczniemy pollować boot (żeby nie trafić w
+ * starą instancję firmware), oraz jak długo czekać na podniesienie się STM32. */
+#define RESET_SETTLE_MS     100
 #define BOOT_TMO_MS         2000
 #define BOOT_POLL_MS        20
 
 static const char *TAG = "RADAR";
 
 /* Nazwy bitów Detector Status do dekodowania (bit -> etykieta). */
-static const struct { uint8_t bit; const char *name; } k_status_bits[] = {
+static const struct { uint8_t bit; const char *name; } s_status_bits[] = {
     { 0,  "RSS_REGISTER_OK"       }, { 1,  "CONFIG_CREATE_OK"      },
     { 2,  "SENSOR_CREATE_OK"      }, { 3,  "SENSOR_CALIBRATE_OK"   },
     { 4,  "DETECTOR_CREATE_OK"    }, { 5,  "DETECTOR_BUFFER_OK"    },
@@ -98,18 +100,20 @@ static esp_err_t radar_read_u32(uint16_t reg, uint32_t *out)
     return ESP_OK;
 }
 
-/* Czeka aż w Detector Status zgaśnie BUSY. Zwraca ostatni odczytany status
- * przez *status. ESP_ERR_TIMEOUT, jeśli nie zgasło w `tmo_ms`. */
+/* Czeka aż w Detector Status zgaśnie BUSY. Ostatni udany odczyt trafia do
+ * *status. Błąd odczytu (NAK, gdy STM32 kalibruje po APPLY) traktujemy jak
+ * "wciąż BUSY" i pętlimy do `tmo_ms` — spójnie z radar_wait_boot() i z zasadą
+ * "ostrzegaj, nie brickuj". Zwraca ESP_ERR_TIMEOUT, jeśli nie zgasło w oknie. */
 static esp_err_t radar_wait_not_busy(uint32_t tmo_ms, uint32_t *status)
 {
     uint32_t waited = 0;
     for (;;) {
-        esp_err_t err = radar_read_u32(REG_DETECTOR_STATUS, status);
-        if (err != ESP_OK) {
-            return err;
-        }
-        if ((*status & ST_BUSY) == 0) {
-            return ESP_OK;
+        uint32_t s = 0;
+        if (radar_read_u32(REG_DETECTOR_STATUS, &s) == ESP_OK) {
+            *status = s;
+            if ((s & ST_BUSY) == 0) {
+                return ESP_OK;
+            }
         }
         if (waited >= tmo_ms) {
             return ESP_ERR_TIMEOUT;
@@ -145,12 +149,12 @@ const char *radar_status_decode(uint32_t status, char *buf, size_t n)
     }
     buf[0] = '\0';
     size_t used = 0;
-    for (size_t i = 0; i < sizeof(k_status_bits) / sizeof(k_status_bits[0]); i++) {
-        if (!(status & (1u << k_status_bits[i].bit))) {
+    for (size_t i = 0; i < sizeof(s_status_bits) / sizeof(s_status_bits[0]); i++) {
+        if (!(status & (1u << s_status_bits[i].bit))) {
             continue;
         }
         int w = snprintf(buf + used, n - used, "%s%s",
-                         used ? "|" : "", k_status_bits[i].name);
+                         used ? "|" : "", s_status_bits[i].name);
         if (w < 0 || (size_t)w >= n - used) {
             break;   /* bufor pełny — reszta flag urwana, i tak diagnostyka */
         }
@@ -197,12 +201,10 @@ static esp_err_t radar_apply_and_start(radar_apply_result_t *r)
         ESP_LOGE(TAG, "Zapis APPLY_CONFIGURATION: %s", esp_err_to_name(err));
         return err;
     }
-    err = radar_wait_not_busy(BUSY_TMO_APPLY_MS, &st);
-    if (err == ESP_ERR_TIMEOUT) {
+    /* radar_wait_not_busy zwraca już tylko ESP_OK / ESP_ERR_TIMEOUT — timeout
+     * logujemy i brniemy do STARTu (STM32 potrafi NAK-ować w trakcie kalibracji). */
+    if (radar_wait_not_busy(BUSY_TMO_APPLY_MS, &st) == ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "BUSY nie zgasło w %d ms po APPLY — brnę dalej.", BUSY_TMO_APPLY_MS);
-    } else if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Poll statusu po APPLY: %s", esp_err_to_name(err));
-        return err;
     }
 
     err = radar_write_u32(REG_COMMAND, CMD_START_DETECTOR);
@@ -210,12 +212,8 @@ static esp_err_t radar_apply_and_start(radar_apply_result_t *r)
         ESP_LOGE(TAG, "Zapis START_DETECTOR: %s", esp_err_to_name(err));
         return err;
     }
-    err = radar_wait_not_busy(BUSY_TMO_START_MS, &st);
-    if (err == ESP_ERR_TIMEOUT) {
+    if (radar_wait_not_busy(BUSY_TMO_START_MS, &st) == ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "BUSY nie zgasło w %d ms po START — brnę dalej.", BUSY_TMO_START_MS);
-    } else if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Poll statusu po START: %s", esp_err_to_name(err));
-        return err;
     }
 
     r->detector_status = st;
@@ -245,31 +243,31 @@ static esp_err_t radar_apply_and_start(radar_apply_result_t *r)
     return ESP_OK;
 }
 
-/* Odczyt zwrotny reprezentatywnych rejestrów — czy write-all + APPLY faktycznie
- * weszły. Loguje każdą niezgodność. */
+/* Odczyt zwrotny CAŁEGO zestawu rejestrów przez RADAR_CFG_DESC — czy write-all
+ * faktycznie wszedł. Adresy bierze z tabeli (jedno źródło prawdy), nie z drugiej
+ * kopii. Każdą niezgodność loguje; nie brickuje. */
 static bool radar_verify_readback(const radar_cfg_t *cfg)
 {
-    const struct { uint16_t reg; uint32_t want; const char *key; } check[] = {
-        { 0x0052, cfg->start_mm,                  "start_mm" },
-        { 0x0053, cfg->end_mm,                    "end_mm" },
-        { 0x0045, cfg->frame_rate_mhz,            "frame_rate_mhz" },
-        { 0x0046, cfg->intra_detection_threshold, "intra_detection_threshold" },
-    };
-    bool ok = true;
-    for (size_t i = 0; i < sizeof(check) / sizeof(check[0]); i++) {
+    int mismatch = 0;
+    for (size_t i = 0; i < RADAR_CFG_N; i++) {
+        uint32_t want = *(const uint32_t *)((const char *)cfg + RADAR_CFG_DESC[i].off);
         uint32_t got = 0;
-        if (radar_read_u32(check[i].reg, &got) != ESP_OK) {
+        if (radar_read_u32(RADAR_CFG_DESC[i].reg, &got) != ESP_OK) {
             ESP_LOGW(TAG, "Weryfikacja: odczyt 0x%04x (%s) nie powiódł się",
-                     check[i].reg, check[i].key);
-            ok = false;
-        } else if (got != check[i].want) {
-            ESP_LOGW(TAG, "Weryfikacja: %s (0x%04x) = %lu, oczekiwano %lu",
-                     check[i].key, check[i].reg, (unsigned long)got,
-                     (unsigned long)check[i].want);
-            ok = false;
+                     RADAR_CFG_DESC[i].reg, RADAR_CFG_DESC[i].key);
+            mismatch++;
+        } else if (got != want) {
+            ESP_LOGW(TAG, "Weryfikacja: %s (0x%04x) = %lu, zapisano %lu",
+                     RADAR_CFG_DESC[i].key, RADAR_CFG_DESC[i].reg,
+                     (unsigned long)got, (unsigned long)want);
+            mismatch++;
         }
     }
-    return ok;
+    if (mismatch) {
+        ESP_LOGW(TAG, "Odczyt zwrotny: %d/%d rejestrów się nie zgadza.",
+                 mismatch, RADAR_CFG_N);
+    }
+    return mismatch == 0;
 }
 
 esp_err_t radar_apply_config(const radar_cfg_t *cfg, radar_apply_result_t *out)
@@ -282,6 +280,12 @@ esp_err_t radar_apply_config(const radar_cfg_t *cfg, radar_apply_result_t *out)
     /* --- STOP + RESET_MODULE: cofnij moduł do POR, by przyjął nową konfigurację. --- */
     radar_write_u32(REG_COMMAND, CMD_STOP_DETECTOR);   /* błąd tu nieistotny */
     radar_write_u32(REG_COMMAND, CMD_RESET_MODULE);
+
+    /* Daj STM32 chwilę na faktyczne wejście w reset — bez tego pierwszy odczyt
+     * VERSION/STATUS może trafić jeszcze do STAREJ instancji firmware (wygląda
+     * jak "boot OK") i write-all poleciałby w wyścig z resetem.
+     * TODO(faza 6): zmierzyć realny czas NAK-owania po RESET_MODULE i dostroić. */
+    vTaskDelay(pdMS_TO_TICKS(RESET_SETTLE_MS));
 
     esp_err_t err = radar_wait_boot(&r.version);
     if (err != ESP_OK) {

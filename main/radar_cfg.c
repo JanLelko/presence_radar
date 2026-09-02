@@ -1,7 +1,6 @@
 #include "radar_cfg.h"
 
 #include <stddef.h>
-#include <string.h>
 #include <stdio.h>
 
 /*
@@ -42,9 +41,11 @@ const radar_cfg_desc_t RADAR_CFG_DESC[RADAR_CFG_N] = {
 };
 #undef D
 
-/* Pole w strukturze bez wiersza w tabeli => ciche cofnięcie do defaultu
- * sprzętowego przy każdej rekonfiguracji (semantyka write-all po RESET_MODULE).
- * Te dwie asercje robią z tego błąd kompilacji. */
+/* Dodanie/usunięcie pola w radar_cfg_t bez aktualizacji tabeli i RADAR_CFG_N =
+ * błąd kompilacji (rozmiar struktury != liczba wierszy). Semantyka write-all po
+ * RESET_MODULE tego wymaga — niezapisany rejestr cicho wraca do defaultu POR.
+ * Uwaga: asercje NIE łapią wiersza z powielonym .off; przed tym broni jeszcze
+ * radar_cfg_t c = {0} w radar_cfg_preset() (najgorszy przypadek: zapis zera). */
 _Static_assert(sizeof(radar_cfg_t) / sizeof(uint32_t) == RADAR_CFG_N,
                "radar_cfg_t: dodano/usunieto pole -> zaktualizuj RADAR_CFG_DESC i RADAR_CFG_N");
 _Static_assert(sizeof(RADAR_CFG_DESC) / sizeof(RADAR_CFG_DESC[0]) == RADAR_CFG_N,
@@ -57,7 +58,7 @@ static inline uint32_t *field_ptr(radar_cfg_t *c, size_t i)
 
 radar_cfg_t radar_cfg_preset(radar_cfg_preset_t preset)
 {
-    radar_cfg_t c;
+    radar_cfg_t c = {0};   /* siatka bezpieczeństwa, gdyby tabela nie pokryła pola */
     for (size_t i = 0; i < RADAR_CFG_N; i++) {
         *field_ptr(&c, i) = RADAR_CFG_DESC[i].def;
     }
@@ -76,7 +77,9 @@ radar_cfg_t radar_cfg_preset(radar_cfg_preset_t preset)
         c.intra_detection_enabled   = 1;
         c.inter_detection_enabled   = 0;
         c.auto_profile_enabled      = 0;
-        c.manual_profile            = 1;
+        c.manual_profile            = 1;   /* profil 1 = najkrótszy zasięg, najlepsza rozdz. */
+        /* auto_step_length zostaje 1 — krok wyprowadzany z profilu 1 (krótki),
+         * co jest OK dla latencji; ręczny krok dostroimy pomiarowo w fazie 6. */
         c.reset_filters_on_prepare  = 1;
         c.intra_detection_threshold = 300;
     }
