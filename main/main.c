@@ -17,6 +17,7 @@
 #include "status_led.h" // Sygnalizacja stanu na wbudowanym LED RGB (GPIO8)
 #include "board_pins.h" // Wszystkie piny GPIO w jednym miejscu
 #include "radar.h"      // Warstwa I2C do modułu XM125 (jedyny właściciel magistrali)
+#include "radar_cfg.h"  // Model konfiguracji radaru (struct + presety)
 #define MQTT_TOPIC "pokoj/101/radar"
 
 // Piny (PIN_LED, PIN_BUTTON, PIN_BUZZER, PIN_RADAR_INT) — patrz board_pins.h.
@@ -168,9 +169,14 @@ void app_main(void) {
     };
     gpio_config(&btn_conf);
 
-    // 3. Start Radaru — bring-up z odczytem statusu detektora (ostrzega w logu,
-    //    nie brickuje). Szczegóły dekodu statusu w radar.c.
-    radar_bringup(NULL);
+    // 3. Start Radaru — aplikujemy pełną konfigurację (write-all + RESET_MODULE +
+    //    APPLY + START + weryfikacja). Preset CARE = udokumentowane defaulty POR.
+    //    Faza 2 (test na sprzęcie): dopisz tu np. `boot_cfg.end_mm = 1200;` i
+    //    sprawdź, że raportowany `odleglosc` saturuje na ~1200.
+    //    Faza 3 nadpisze to configiem z NVS / MQTT.
+    radar_cfg_t boot_cfg = radar_cfg_preset(CFG_PRESET_CARE);
+    radar_cfg_clamp(&boot_cfg);
+    radar_apply_config(&boot_cfg, NULL);
     ESP_LOGI(TAG, "Radar uruchomiony. Wchodzę w pętlę.");
 
     // Przycisk obsługuje osobny task (próbkowanie + debounce, niezależnie od pętli).

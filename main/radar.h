@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "radar_cfg.h"
 
 /*
  * Warstwa dostępu do modułu radarowego Acconeer XM125 (koprocesor STM32,
@@ -31,29 +32,34 @@ typedef struct {
     uint32_t inter_score;     /* rejestr 0x0013 — energia ruchu WOLNEGO (makro/obecność) */
 } radar_frame_t;
 
-/* Wynik bring-upu z weryfikacją — do zalogowania / opublikowania (faza 3). */
+/* Wynik aplikacji konfiguracji — do zalogowania / opublikowania (faza 3). */
 typedef struct {
     uint32_t version;          /* rejestr 0x0000; 0 => WAKE_UP prawdopodobnie wisi */
     uint32_t detector_status;  /* rejestr 0x0003 po APPLY + START */
     bool     apply_ok;         /* maska bitów 0..7 statusu == 0xFF */
     bool     had_errors;       /* jakikolwiek bit błędu (16..23, 28) */
+    bool     verify_ok;        /* odczyt zwrotny wybranych rejestrów zgadza się z cfg */
     bool     measuring;        /* measure counter (0x0002) rośnie => detektor liczy */
     char     status_str[160];  /* dekode detector_status: "RSS_REGISTER_OK|CONFIG_APPLY_OK|..." */
-} radar_bringup_result_t;
+} radar_apply_result_t;
 
 /* Konfiguruje magistralę I2C0 jako master: SDA=PIN_I2C_SDA, SCL=PIN_I2C_SCL,
  * 100 kHz, wewnętrzne pull-upy. Woła się raz przy starcie. */
 esp_err_t radar_init(void);
 
-/* Bring-up z odczytem statusu detektora: loguje wersję, dekode Detector Status
- * (0x0003) i to, czy Measure Counter (0x0002) rośnie. Sekwencja: APPLY (1) ->
- * poll BUSY -> START (2) -> poll BUSY.
+/* Aplikuje pełną konfigurację do modułu i uruchamia detektor. Sekwencja:
+ *   STOP -> RESET_MODULE -> czekaj na boot -> zapis WSZYSTKICH rejestrów z
+ *   RADAR_CFG_DESC -> APPLY (1) -> poll BUSY -> START (2) -> poll BUSY ->
+ *   odczyt zwrotny wybranych rejestrów + Measure Counter.
  *
- * NIE brickuje: gdy weryfikacja pokaże błąd, loguje go GŁOŚNO i tak wchodzi w
- * START (świadomie — ostrzejszy bring-up, który odmawia tam, gdzie ślepy
- * działał, zabiłby działające demo). Zwraca ESP_OK, jeśli magistrala I2C żyła;
- * ESP_ERR_* tylko przy twardej awarii I2C. `out` może być NULL. */
-esp_err_t radar_bringup(radar_bringup_result_t *out);
+ * RESET_MODULE cofa moduł do stanu POR, więc zapis MUSI objąć cały zestaw —
+ * stąd write-all, nie tylko zmienione pola.
+ *
+ * NIE brickuje: błąd statusu / niezgodność odczytu zwrotnego są logowane
+ * GŁOŚNO, ale funkcja i tak kończy w STARCIE. Zwraca ESP_OK, jeśli magistrala
+ * I2C żyła; ESP_ERR_* tylko przy twardej awarii I2C lub gdy moduł nie wstał po
+ * resecie. `cfg` jest kopiowane; `out` może być NULL. */
+esp_err_t radar_apply_config(const radar_cfg_t *cfg, radar_apply_result_t *out);
 
 /* Odczytuje 16 bajtów z rejestru 0x0010 i wypełnia radar_frame_t.
  * Zwraca ESP_OK, jeśli transakcja I2C się powiodła. */

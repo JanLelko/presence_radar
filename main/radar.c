@@ -1,7 +1,8 @@
 #include "radar.h"
+#include "radar_cfg.h"
 #include "board_pins.h"
 
-#include <string.h>
+#include <stdio.h>
 #include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,11 +23,11 @@
 #define REG_RESULT          0x0010   /* presence_reg | distance | intra | inter */
 #define REG_COMMAND         0x0100   /* patrz CMD_* */
 
-/* Wartości komend na rejestr 0x0100. */
+/* Wartości komend na rejestr 0x0100 (presence_reg_protocol.h). */
 #define CMD_APPLY_CONFIG    0x00000001u
 #define CMD_START_DETECTOR  0x00000002u
 #define CMD_STOP_DETECTOR   0x00000003u
-/* RESET_MODULE = 0x52535421 ("RST!") — używany w fazie 2 (FSM rekonfiguracji). */
+#define CMD_RESET_MODULE    0x52535421u   /* ASCII "RST!" — cofa STM32 do stanu POR */
 
 /* Detector Status (0x0003) — maski. */
 #define ST_OK_MASK          0x000000FFu   /* bity 0..7 — wszystkie muszą być 1 po APPLY */
@@ -43,6 +44,10 @@
 #define BUSY_TMO_APPLY_MS   3000
 #define BUSY_TMO_START_MS   2000
 #define BUSY_POLL_MS        20
+
+/* Ile czekać, aż moduł odpowie po RESET_MODULE (NAK-uje póki STM32 się nie podniesie). */
+#define BOOT_TMO_MS         2000
+#define BOOT_POLL_MS        20
 
 static const char *TAG = "RADAR";
 
@@ -157,36 +162,37 @@ const char *radar_status_decode(uint32_t status, char *buf, size_t n)
     return buf;
 }
 
-esp_err_t radar_bringup(radar_bringup_result_t *out)
+/* Czeka, aż moduł odpowie po RESET_MODULE: Version czytelny i != 0xFFFFFFFF,
+ * a Detector Status bez BUSY. NAK w tym oknie znaczy "jeszcze nie gotowe",
+ * nie awarię. */
+static esp_err_t radar_wait_boot(uint32_t *version_out)
 {
-    radar_bringup_result_t r = {0};
-    char sbuf[160];
-
-    /* --- Wersja firmware modułu. Same zera => WAKE_UP prawdopodobnie wisi. --- */
-    esp_err_t err = radar_read_u32(REG_VERSION, &r.version);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Odczyt wersji nie powiódł się: %s — magistrala I2C milczy?",
-                 esp_err_to_name(err));
-        return err;   /* twarda awaria I2C — jest sens przerwać */
+    uint32_t waited = 0;
+    for (;;) {
+        uint32_t v = 0;
+        if (radar_read_u32(REG_VERSION, &v) == ESP_OK && v != 0 && v != 0xFFFFFFFFu) {
+            uint32_t st = 0;
+            if (radar_read_u32(REG_DETECTOR_STATUS, &st) == ESP_OK && !(st & ST_BUSY)) {
+                *version_out = v;
+                return ESP_OK;
+            }
+        }
+        if (waited >= BOOT_TMO_MS) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BOOT_POLL_MS));
+        waited += BOOT_POLL_MS;
     }
-    if (r.version == 0) {
-        ESP_LOGW(TAG, "Wersja = 0x00000000 — WAKE_UP nie podciągnięty do 3V3?");
-    } else {
-        ESP_LOGI(TAG, "XM125 firmware v%lu.%lu.%lu",
-                 (unsigned long)((r.version >> 16) & 0xFFFF),
-                 (unsigned long)((r.version >> 8)  & 0xFF),
-                 (unsigned long)( r.version        & 0xFF));
-    }
+}
 
-    /* --- Status przed konfiguracją (informacyjnie). --- */
+/* Wspólny ogon bring-upu: APPLY -> poll BUSY -> ocena statusu -> START ->
+ * poll BUSY -> Measure Counter. Wypełnia pola r; loguje. Nie brickuje przy złym
+ * statusie — zwraca ESP_ERR_* tylko przy twardej awarii I2C. */
+static esp_err_t radar_apply_and_start(radar_apply_result_t *r)
+{
     uint32_t st = 0;
-    if (radar_read_u32(REG_DETECTOR_STATUS, &st) == ESP_OK) {
-        ESP_LOGI(TAG, "Detector Status (przed APPLY): 0x%08lx [%s]",
-                 (unsigned long)st, radar_status_decode(st, sbuf, sizeof(sbuf)));
-    }
 
-    /* --- APPLY_CONFIGURATION -> czekaj na koniec kalibracji. --- */
-    err = radar_write_u32(REG_COMMAND, CMD_APPLY_CONFIG);
+    esp_err_t err = radar_write_u32(REG_COMMAND, CMD_APPLY_CONFIG);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Zapis APPLY_CONFIGURATION: %s", esp_err_to_name(err));
         return err;
@@ -199,7 +205,6 @@ esp_err_t radar_bringup(radar_bringup_result_t *out)
         return err;
     }
 
-    /* --- START_DETECTOR -> czekaj na zejście BUSY. --- */
     err = radar_write_u32(REG_COMMAND, CMD_START_DETECTOR);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Zapis START_DETECTOR: %s", esp_err_to_name(err));
@@ -213,40 +218,105 @@ esp_err_t radar_bringup(radar_bringup_result_t *out)
         return err;
     }
 
-    /* --- Ocena statusu końcowego (OSTRZEGA, nie brickuje). --- */
-    r.detector_status = st;
-    radar_status_decode(st, r.status_str, sizeof(r.status_str));
-    r.apply_ok   = (st & ST_OK_MASK) == ST_OK_MASK;
-    r.had_errors = (st & (ST_ERR_MASK | ST_DETECTOR_ERROR)) != 0;
-
-    if (r.had_errors) {
-        ESP_LOGE(TAG, "BŁĄD detektora po bring-upie: 0x%08lx [%s]",
-                 (unsigned long)st, r.status_str);
-    } else if (!r.apply_ok) {
-        ESP_LOGW(TAG, "Nie wszystkie flagi *_OK ustawione: 0x%08lx [%s]",
-                 (unsigned long)st, r.status_str);
+    r->detector_status = st;
+    radar_status_decode(st, r->status_str, sizeof(r->status_str));
+    r->apply_ok   = (st & ST_OK_MASK) == ST_OK_MASK;
+    r->had_errors = (st & (ST_ERR_MASK | ST_DETECTOR_ERROR)) != 0;
+    if (r->had_errors) {
+        ESP_LOGE(TAG, "BŁĄD detektora: 0x%08lx [%s]", (unsigned long)st, r->status_str);
+    } else if (!r->apply_ok) {
+        ESP_LOGW(TAG, "Nie wszystkie flagi *_OK: 0x%08lx [%s]", (unsigned long)st, r->status_str);
     } else {
-        ESP_LOGI(TAG, "Detektor OK: 0x%08lx [%s]", (unsigned long)st, r.status_str);
+        ESP_LOGI(TAG, "Detektor OK: 0x%08lx [%s]", (unsigned long)st, r->status_str);
     }
 
-    /* --- Czy detektor faktycznie liczy? Measure Counter musi rosnąć. --- */
     uint32_t mc0 = 0, mc1 = 0;
     radar_read_u32(REG_MEASURE_COUNTER, &mc0);
     vTaskDelay(pdMS_TO_TICKS(500));
     radar_read_u32(REG_MEASURE_COUNTER, &mc1);
-    r.measuring = (mc1 != mc0);
-    if (r.measuring) {
+    r->measuring = (mc1 != mc0);
+    if (r->measuring) {
         ESP_LOGI(TAG, "Measure Counter %lu -> %lu — detektor liczy.",
                  (unsigned long)mc0, (unsigned long)mc1);
     } else {
-        ESP_LOGW(TAG, "Measure Counter zamrożony na %lu — detektor NIE liczy "
-                      "(start nie przyjęty?). Wchodzę w pętlę mimo to.",
+        ESP_LOGW(TAG, "Measure Counter zamrożony na %lu — detektor NIE liczy. Brnę dalej.",
                  (unsigned long)mc0);
     }
+    return ESP_OK;
+}
 
-    if (out) {
-        *out = r;
+/* Odczyt zwrotny reprezentatywnych rejestrów — czy write-all + APPLY faktycznie
+ * weszły. Loguje każdą niezgodność. */
+static bool radar_verify_readback(const radar_cfg_t *cfg)
+{
+    const struct { uint16_t reg; uint32_t want; const char *key; } check[] = {
+        { 0x0052, cfg->start_mm,                  "start_mm" },
+        { 0x0053, cfg->end_mm,                    "end_mm" },
+        { 0x0045, cfg->frame_rate_mhz,            "frame_rate_mhz" },
+        { 0x0046, cfg->intra_detection_threshold, "intra_detection_threshold" },
+    };
+    bool ok = true;
+    for (size_t i = 0; i < sizeof(check) / sizeof(check[0]); i++) {
+        uint32_t got = 0;
+        if (radar_read_u32(check[i].reg, &got) != ESP_OK) {
+            ESP_LOGW(TAG, "Weryfikacja: odczyt 0x%04x (%s) nie powiódł się",
+                     check[i].reg, check[i].key);
+            ok = false;
+        } else if (got != check[i].want) {
+            ESP_LOGW(TAG, "Weryfikacja: %s (0x%04x) = %lu, oczekiwano %lu",
+                     check[i].key, check[i].reg, (unsigned long)got,
+                     (unsigned long)check[i].want);
+            ok = false;
+        }
     }
+    return ok;
+}
+
+esp_err_t radar_apply_config(const radar_cfg_t *cfg, radar_apply_result_t *out)
+{
+    if (cfg == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    radar_apply_result_t r = {0};
+
+    /* --- STOP + RESET_MODULE: cofnij moduł do POR, by przyjął nową konfigurację. --- */
+    radar_write_u32(REG_COMMAND, CMD_STOP_DETECTOR);   /* błąd tu nieistotny */
+    radar_write_u32(REG_COMMAND, CMD_RESET_MODULE);
+
+    esp_err_t err = radar_wait_boot(&r.version);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Moduł nie odpowiada po RESET_MODULE (%d ms) — sprawdź WAKE_UP (3V3).",
+                 BOOT_TMO_MS);
+        if (out) { *out = r; }
+        return err;
+    }
+    ESP_LOGI(TAG, "XM125 firmware v%lu.%lu.%lu",
+             (unsigned long)((r.version >> 16) & 0xFFFF),
+             (unsigned long)((r.version >> 8)  & 0xFF),
+             (unsigned long)( r.version        & 0xFF));
+
+    /* --- write-all: cały zestaw rejestrów (wymóg po RESET_MODULE). --- */
+    for (size_t i = 0; i < RADAR_CFG_N; i++) {
+        uint32_t v = *(const uint32_t *)((const char *)cfg + RADAR_CFG_DESC[i].off);
+        err = radar_write_u32(RADAR_CFG_DESC[i].reg, v);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Zapis rejestru 0x%04x (%s): %s",
+                     RADAR_CFG_DESC[i].reg, RADAR_CFG_DESC[i].key, esp_err_to_name(err));
+            if (out) { *out = r; }
+            return err;
+        }
+    }
+
+    err = radar_apply_and_start(&r);
+    if (err != ESP_OK) {
+        if (out) { *out = r; }
+        return err;
+    }
+
+    /* Odczyt zwrotny (OSTRZEGA, nie brickuje). */
+    r.verify_ok = radar_verify_readback(cfg);
+
+    if (out) { *out = r; }
     return ESP_OK;
 }
 
