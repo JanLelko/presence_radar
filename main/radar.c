@@ -1,6 +1,7 @@
 #include "radar.h"
 #include "board_pins.h"
 
+#include <string.h>
 #include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -13,22 +14,52 @@
 /* Adres I2C koprocesora STM32 na module XM125 (7-bitowy). */
 #define RADAR_ADDR          0x52
 
-/* Rejestry XM125 (16-bit adresy, 32-bit big-endian). Pełna mapa:
+/* Rejestry XM125. Pełna mapa (adresy dziesiętne w nagłówku, tu hex):
  * /home/j/main/projects/radar_esp/xm125/Inc/presence_reg_protocol.h */
+#define REG_VERSION         0x0000   /* [31:16] major, [15:8] minor, [7:0] patch */
+#define REG_MEASURE_COUNTER 0x0002   /* rośnie z każdym pomiarem detektora */
+#define REG_DETECTOR_STATUS 0x0003   /* flagi *_OK / *_ERROR / BUSY */
 #define REG_RESULT          0x0010   /* presence_reg | distance | intra | inter */
-#define REG_COMMAND         0x0100   /* 1=apply config, 2=start, 3=stop */
+#define REG_COMMAND         0x0100   /* patrz CMD_* */
 
-/* Timeouty. Burst-read wyniku jest szybki; ścieżka komend może być wolniejsza
- * (STM32 rozciąga zegar przy kalibracji) — faza 1b podniesie ją do 1000 ms. */
+/* Wartości komend na rejestr 0x0100. */
+#define CMD_APPLY_CONFIG    0x00000001u
+#define CMD_START_DETECTOR  0x00000002u
+#define CMD_STOP_DETECTOR   0x00000003u
+/* RESET_MODULE = 0x52535421 ("RST!") — używany w fazie 2 (FSM rekonfiguracji). */
+
+/* Detector Status (0x0003) — maski. */
+#define ST_OK_MASK          0x000000FFu   /* bity 0..7 — wszystkie muszą być 1 po APPLY */
+#define ST_ERR_MASK         0x00FF0000u   /* bity 16..23 — flagi *_ERROR */
+#define ST_DETECTOR_ERROR   (1u << 28)
+#define ST_BUSY             (1u << 31)
+
+/* Timeouty. Burst-read wyniku jest szybki; ścieżka komend/statusu może być
+ * wolna — STM32 rozciąga zegar podczas kalibracji po APPLY. */
 #define TMO_CMD_MS          1000
 #define TMO_READ_MS         100
 
-/* Wartości komend na rejestr 0x0100 (patrz presence_reg_protocol.h). */
-#define CMD_APPLY_CONFIG    0x00000001u
-#define CMD_START_DETECTOR  0x00000002u
-/* #define CMD_STOP_DETECTOR 0x00000003u  — użyty w fazie 2 (FSM) */
+/* Ile czekać na zejście flagi BUSY po APPLY / START. */
+#define BUSY_TMO_APPLY_MS   3000
+#define BUSY_TMO_START_MS   2000
+#define BUSY_POLL_MS        20
 
 static const char *TAG = "RADAR";
+
+/* Nazwy bitów Detector Status do dekodowania (bit -> etykieta). */
+static const struct { uint8_t bit; const char *name; } k_status_bits[] = {
+    { 0,  "RSS_REGISTER_OK"       }, { 1,  "CONFIG_CREATE_OK"      },
+    { 2,  "SENSOR_CREATE_OK"      }, { 3,  "SENSOR_CALIBRATE_OK"   },
+    { 4,  "DETECTOR_CREATE_OK"    }, { 5,  "DETECTOR_BUFFER_OK"    },
+    { 6,  "SENSOR_BUFFER_OK"      }, { 7,  "CONFIG_APPLY_OK"       },
+    { 16, "RSS_REGISTER_ERROR"    }, { 17, "CONFIG_CREATE_ERROR"   },
+    { 18, "SENSOR_CREATE_ERROR"   }, { 19, "SENSOR_CALIBRATE_ERROR"},
+    { 20, "DETECTOR_CREATE_ERROR" }, { 21, "DETECTOR_BUFFER_ERROR" },
+    { 22, "SENSOR_BUFFER_ERROR"   }, { 23, "CONFIG_APPLY_ERROR"    },
+    { 28, "DETECTOR_ERROR"        }, { 31, "BUSY"                  },
+};
+
+/* ---------- Prymitywy I2C ---------- */
 
 /*
  * Zapis 32-bitowej wartości pod 16-bitowy adres rejestru XM125.
@@ -44,6 +75,46 @@ static esp_err_t radar_write_u32(uint16_t reg, uint32_t value)
     return i2c_master_write_to_device(I2C_PORT, RADAR_ADDR, frame, sizeof(frame),
                                       TMO_CMD_MS / portTICK_PERIOD_MS);
 }
+
+/* Odczyt pojedynczego rejestru 32-bit (adres out MSB-first, wartość big-endian). */
+static esp_err_t radar_read_u32(uint16_t reg, uint32_t *out)
+{
+    uint8_t addr[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
+    uint8_t data[4] = {0};
+    esp_err_t err = i2c_master_write_read_device(I2C_PORT, RADAR_ADDR,
+                                                 addr, sizeof(addr),
+                                                 data, sizeof(data),
+                                                 TMO_CMD_MS / portTICK_PERIOD_MS);
+    if (err != ESP_OK) {
+        return err;
+    }
+    *out = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] <<  8) | ((uint32_t)data[3]);
+    return ESP_OK;
+}
+
+/* Czeka aż w Detector Status zgaśnie BUSY. Zwraca ostatni odczytany status
+ * przez *status. ESP_ERR_TIMEOUT, jeśli nie zgasło w `tmo_ms`. */
+static esp_err_t radar_wait_not_busy(uint32_t tmo_ms, uint32_t *status)
+{
+    uint32_t waited = 0;
+    for (;;) {
+        esp_err_t err = radar_read_u32(REG_DETECTOR_STATUS, status);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if ((*status & ST_BUSY) == 0) {
+            return ESP_OK;
+        }
+        if (waited >= tmo_ms) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BUSY_POLL_MS));
+        waited += BUSY_POLL_MS;
+    }
+}
+
+/* ---------- API ---------- */
 
 esp_err_t radar_init(void)
 {
@@ -62,25 +133,120 @@ esp_err_t radar_init(void)
     return i2c_driver_install(I2C_PORT, conf.mode, 0, 0, 0);
 }
 
-esp_err_t radar_bringup_blind(void)
+const char *radar_status_decode(uint32_t status, char *buf, size_t n)
 {
-    /* 1) Apply config — zatwierdza domyślną konfigurację detektora. */
-    esp_err_t err = radar_write_u32(REG_COMMAND, CMD_APPLY_CONFIG);
+    if (buf == NULL || n == 0) {
+        return "";
+    }
+    buf[0] = '\0';
+    size_t used = 0;
+    for (size_t i = 0; i < sizeof(k_status_bits) / sizeof(k_status_bits[0]); i++) {
+        if (!(status & (1u << k_status_bits[i].bit))) {
+            continue;
+        }
+        int w = snprintf(buf + used, n - used, "%s%s",
+                         used ? "|" : "", k_status_bits[i].name);
+        if (w < 0 || (size_t)w >= n - used) {
+            break;   /* bufor pełny — reszta flag urwana, i tak diagnostyka */
+        }
+        used += (size_t)w;
+    }
+    if (used == 0) {
+        snprintf(buf, n, "(brak flag: 0x%08lx)", (unsigned long)status);
+    }
+    return buf;
+}
+
+esp_err_t radar_bringup(radar_bringup_result_t *out)
+{
+    radar_bringup_result_t r = {0};
+    char sbuf[160];
+
+    /* --- Wersja firmware modułu. Same zera => WAKE_UP prawdopodobnie wisi. --- */
+    esp_err_t err = radar_read_u32(REG_VERSION, &r.version);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Apply config nie powiodło się: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Odczyt wersji nie powiódł się: %s — magistrala I2C milczy?",
+                 esp_err_to_name(err));
+        return err;   /* twarda awaria I2C — jest sens przerwać */
+    }
+    if (r.version == 0) {
+        ESP_LOGW(TAG, "Wersja = 0x00000000 — WAKE_UP nie podciągnięty do 3V3?");
+    } else {
+        ESP_LOGI(TAG, "XM125 firmware v%lu.%lu.%lu",
+                 (unsigned long)((r.version >> 16) & 0xFFFF),
+                 (unsigned long)((r.version >> 8)  & 0xFF),
+                 (unsigned long)( r.version        & 0xFF));
+    }
+
+    /* --- Status przed konfiguracją (informacyjnie). --- */
+    uint32_t st = 0;
+    if (radar_read_u32(REG_DETECTOR_STATUS, &st) == ESP_OK) {
+        ESP_LOGI(TAG, "Detector Status (przed APPLY): 0x%08lx [%s]",
+                 (unsigned long)st, radar_status_decode(st, sbuf, sizeof(sbuf)));
+    }
+
+    /* --- APPLY_CONFIGURATION -> czekaj na koniec kalibracji. --- */
+    err = radar_write_u32(REG_COMMAND, CMD_APPLY_CONFIG);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Zapis APPLY_CONFIGURATION: %s", esp_err_to_name(err));
         return err;
     }
-    /* STM32 potrzebuje chwili na przeliczenie kalibracji wewnętrznej. */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    err = radar_wait_not_busy(BUSY_TMO_APPLY_MS, &st);
+    if (err == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "BUSY nie zgasło w %d ms po APPLY — brnę dalej.", BUSY_TMO_APPLY_MS);
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Poll statusu po APPLY: %s", esp_err_to_name(err));
+        return err;
+    }
 
-    /* 2) Start — detektor w tryb ciągłego pomiaru. */
+    /* --- START_DETECTOR -> czekaj na zejście BUSY. --- */
     err = radar_write_u32(REG_COMMAND, CMD_START_DETECTOR);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Start radaru nie powiódł się: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Zapis START_DETECTOR: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = radar_wait_not_busy(BUSY_TMO_START_MS, &st);
+    if (err == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "BUSY nie zgasło w %d ms po START — brnę dalej.", BUSY_TMO_START_MS);
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Poll statusu po START: %s", esp_err_to_name(err));
         return err;
     }
 
-    ESP_LOGI(TAG, "Radar uruchomiony (bring-up ślepy).");
+    /* --- Ocena statusu końcowego (OSTRZEGA, nie brickuje). --- */
+    r.detector_status = st;
+    radar_status_decode(st, r.status_str, sizeof(r.status_str));
+    r.apply_ok   = (st & ST_OK_MASK) == ST_OK_MASK;
+    r.had_errors = (st & (ST_ERR_MASK | ST_DETECTOR_ERROR)) != 0;
+
+    if (r.had_errors) {
+        ESP_LOGE(TAG, "BŁĄD detektora po bring-upie: 0x%08lx [%s]",
+                 (unsigned long)st, r.status_str);
+    } else if (!r.apply_ok) {
+        ESP_LOGW(TAG, "Nie wszystkie flagi *_OK ustawione: 0x%08lx [%s]",
+                 (unsigned long)st, r.status_str);
+    } else {
+        ESP_LOGI(TAG, "Detektor OK: 0x%08lx [%s]", (unsigned long)st, r.status_str);
+    }
+
+    /* --- Czy detektor faktycznie liczy? Measure Counter musi rosnąć. --- */
+    uint32_t mc0 = 0, mc1 = 0;
+    radar_read_u32(REG_MEASURE_COUNTER, &mc0);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    radar_read_u32(REG_MEASURE_COUNTER, &mc1);
+    r.measuring = (mc1 != mc0);
+    if (r.measuring) {
+        ESP_LOGI(TAG, "Measure Counter %lu -> %lu — detektor liczy.",
+                 (unsigned long)mc0, (unsigned long)mc1);
+    } else {
+        ESP_LOGW(TAG, "Measure Counter zamrożony na %lu — detektor NIE liczy "
+                      "(start nie przyjęty?). Wchodzę w pętlę mimo to.",
+                 (unsigned long)mc0);
+    }
+
+    if (out) {
+        *out = r;
+    }
     return ESP_OK;
 }
 

@@ -168,8 +168,9 @@ void app_main(void) {
     };
     gpio_config(&btn_conf);
 
-    // 3. Start Radaru (ślepy bring-up jak dotąd — faza 1b doda weryfikację statusu).
-    radar_bringup_blind();
+    // 3. Start Radaru — bring-up z odczytem statusu detektora (ostrzega w logu,
+    //    nie brickuje). Szczegóły dekodu statusu w radar.c.
+    radar_bringup(NULL);
     ESP_LOGI(TAG, "Radar uruchomiony. Wchodzę w pętlę.");
 
     // Przycisk obsługuje osobny task (próbkowanie + debounce, niezależnie od pętli).
