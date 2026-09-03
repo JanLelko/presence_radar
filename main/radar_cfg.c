@@ -2,6 +2,10 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "nvs.h"
+#include "esp_rom_crc.h"
 
 /*
  * Zakresy min/max wg "A121 Presence Detector User Guide", Tabela 3
@@ -139,4 +143,174 @@ int radar_cfg_sanitize(radar_cfg_t *c, char warn[][RADAR_CFG_WARN_LEN], int max_
 
     #undef PUSH_WARN
     return n;
+}
+
+/* ================= JSON ================= */
+
+/* Szuka "<key>" w null-terminowanym JSON-ie i wyłuskuje wartość: liczbę
+ * dziesiętną albo true/false. Płaski skan wystarcza — payload cfg nie ma
+ * zagnieżdżeń. Cudzysłowy w igle chronią przed kolizją prefiksów kluczy. */
+static bool json_find_u32(const char *json, const char *key, uint32_t *val)
+{
+    char needle[48];
+    int nl = snprintf(needle, sizeof needle, "\"%s\"", key);
+    if (nl < 0 || nl >= (int)sizeof needle) {
+        return false;
+    }
+    const char *p = strstr(json, needle);
+    if (p == NULL) {
+        return false;
+    }
+    p += nl;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    if (*p != ':') {
+        return false;
+    }
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    if (strncmp(p, "true", 4) == 0) {
+        *val = 1;
+        return true;
+    }
+    if (strncmp(p, "false", 5) == 0) {
+        *val = 0;
+        return true;
+    }
+    if (*p < '0' || *p > '9') {
+        return false;
+    }
+    *val = (uint32_t)strtoul(p, NULL, 10);
+    return true;
+}
+
+bool radar_cfg_from_json(radar_cfg_t *c, const char *json, char *err, size_t errn)
+{
+    #define FAIL(msg) do { if (err && errn) { snprintf(err, errn, "%s", (msg)); } return false; } while (0)
+
+    if (c == NULL || json == NULL) {
+        FAIL("null");
+    }
+
+    const char *p = json;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    if (*p != '{') {
+        FAIL("nie obiekt JSON");
+    }
+
+    /* Opcjonalny "preset": przeładuj bazę przed nałożeniem delt. */
+    const char *pr = strstr(json, "\"preset\"");
+    if (pr != NULL) {
+        if (strstr(pr, "\"game\"") != NULL) {
+            *c = radar_cfg_preset(CFG_PRESET_GAME);
+        } else if (strstr(pr, "\"care\"") != NULL) {
+            *c = radar_cfg_preset(CFG_PRESET_CARE);
+        }
+        /* inne wartości (np. "custom") = brak przeładowania, delty na *c */
+    }
+
+    int hits = 0;
+    for (size_t i = 0; i < RADAR_CFG_N; i++) {
+        uint32_t v;
+        if (json_find_u32(json, RADAR_CFG_DESC[i].key, &v)) {
+            *field_ptr(c, i) = v;
+            hits++;
+        }
+    }
+
+    if (pr == NULL && hits == 0) {
+        FAIL("brak znanych kluczy");
+    }
+    return true;
+
+    #undef FAIL
+}
+
+int radar_cfg_to_json_fields(const radar_cfg_t *c, char *buf, size_t n)
+{
+    size_t used = 0;
+    for (size_t i = 0; i < RADAR_CFG_N; i++) {
+        uint32_t v = *(const uint32_t *)((const char *)c + RADAR_CFG_DESC[i].off);
+        int w = snprintf(buf + used, n - used, "%s\"%s\":%lu",
+                         used ? "," : "", RADAR_CFG_DESC[i].key, (unsigned long)v);
+        if (w < 0 || (size_t)w >= n - used) {
+            return -1;
+        }
+        used += (size_t)w;
+    }
+    return (int)used;
+}
+
+/* ================= NVS ================= */
+
+#define CFG_NVS_NS    "storage"
+#define CFG_NVS_KEY   "cfg_v1"
+#define CFG_MAGIC     0x47464352u   /* 'RCFG' */
+#define CFG_VERSION   1
+
+typedef struct {
+    uint32_t    magic;
+    uint16_t    version;
+    uint16_t    len;      /* sizeof(radar_cfg_t) — łapie zmianę modelu */
+    uint32_t    crc32;    /* nad polem radar */
+    radar_cfg_t radar;
+} cfg_persist_t;
+
+esp_err_t radar_cfg_save(const radar_cfg_t *c)
+{
+    if (c == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    cfg_persist_t p = {
+        .magic   = CFG_MAGIC,
+        .version = CFG_VERSION,
+        .len     = (uint16_t)sizeof(radar_cfg_t),
+        .radar   = *c,
+    };
+    p.crc32 = esp_rom_crc32_le(0, (const uint8_t *)&p.radar, sizeof p.radar);
+
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(CFG_NVS_NS, NVS_READWRITE, &h);
+    if (e != ESP_OK) {
+        return e;
+    }
+    e = nvs_set_blob(h, CFG_NVS_KEY, &p, sizeof p);
+    if (e == ESP_OK) {
+        e = nvs_commit(h);
+    }
+    nvs_close(h);
+    return e;
+}
+
+esp_err_t radar_cfg_load(radar_cfg_t *out)
+{
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(CFG_NVS_NS, NVS_READONLY, &h);
+    if (e != ESP_OK) {
+        return e;
+    }
+    cfg_persist_t p;
+    size_t len = sizeof p;
+    e = nvs_get_blob(h, CFG_NVS_KEY, &p, &len);
+    nvs_close(h);
+    if (e != ESP_OK) {
+        return e;
+    }
+    if (len != sizeof p || p.magic != CFG_MAGIC ||
+        p.version != CFG_VERSION || p.len != sizeof(radar_cfg_t)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (esp_rom_crc32_le(0, (const uint8_t *)&p.radar, sizeof p.radar) != p.crc32) {
+        return ESP_ERR_INVALID_CRC;
+    }
+    *out = p.radar;
+    return ESP_OK;
 }

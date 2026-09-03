@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "esp_err.h"
 
 /*
  * Model danych konfiguracji radaru XM125 — lustro zapisywalnych rejestrów
@@ -85,5 +86,33 @@ int radar_cfg_clamp(radar_cfg_t *c);
  * Poprawia to, co da się poprawić, resztę zgłasza tekstem do `warn`.
  * Zwraca liczbę wypełnionych wpisów `warn` (<= max_warn). */
 int radar_cfg_sanitize(radar_cfg_t *c, char warn[][RADAR_CFG_WARN_LEN], int max_warn);
+
+/* --- JSON (parser ręczny — IDF v6.1 nie dostarcza cJSON) --------------------
+ * Payload konfiguracji jest płaski: pary "<klucz>": <liczba|true|false>, bez
+ * zagnieżdżeń i tablic (patrz docs/parametry_radaru.md). */
+
+/* Nakłada na *c znalezione pary "<klucz>": <wartość> dla kluczy z RADAR_CFG_DESC.
+ * Baza (*c) to zwykle aktualnie zaaplikowany config — panel wysyła tylko delty.
+ * Jeśli payload zawiera "preset":"care"|"game", najpierw przeładowuje *c z tego
+ * presetu, potem nakłada delty. Zwraca false, gdy payload nie zaczyna się od '{'
+ * albo nie ma ani presetu, ani żadnego znanego klucza; `err` (może być NULL)
+ * dostaje krótki powód. Wartości nie są walidowane — to robi radar_cfg_clamp(). */
+bool radar_cfg_from_json(radar_cfg_t *c, const char *json, char *err, size_t errn);
+
+/* Serializuje wszystkie 24 pola jako "klucz":wartość rozdzielone przecinkiem,
+ * BEZ klamer (wołający wstawia to do swojego obiektu). Zwraca liczbę zapisanych
+ * znaków bez NUL, albo -1 przy zbyt małym buforze. */
+int radar_cfg_to_json_fields(const radar_cfg_t *c, char *buf, size_t n);
+
+/* --- Trwałość w NVS (namespace "storage", klucz "cfg_v1") ------------------
+ * Blob: magic + wersja + długość + CRC32 nad radar_cfg_t. Wszystko-albo-nic:
+ * brownout w połowie zapisu = blob nie przejdzie walidacji -> preset fabryczny. */
+
+/* ESP_OK tylko gdy blob istnieje i przechodzi walidację; wpp *out nietknięte
+ * (wołający używa wtedy radar_cfg_preset(CFG_PRESET_CARE)). */
+esp_err_t radar_cfg_load(radar_cfg_t *out);
+
+/* Zapisuje *c jako blob. Wołać dopiero po udanym radar_apply_config(). */
+esp_err_t radar_cfg_save(const radar_cfg_t *c);
 
 #endif /* RADAR_CFG_H */

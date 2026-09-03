@@ -14,6 +14,9 @@ static const char *TAG = "WIFI_MQTT";
 /* Definicja zmiennej globalnej zadeklarowanej w wifi_mqtt.h */
 esp_mqtt_client_handle_t mqtt_client = NULL;
 
+/* Kolejka komend panel -> pętla radaru. Tworzona w app_main przed setup_mqtt(). */
+QueueHandle_t mqtt_cmd_queue = NULL;
+
 // FLAGA ssid, password
 volatile bool wifi_ready = false;
 
@@ -35,10 +38,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT połączony — subskrybuję %s", MQTT_CMD_TOPIC);
+        ESP_LOGI(TAG, "MQTT połączony — subskrybuję %s oraz %s",
+                 MQTT_CMD_TOPIC, MQTT_CFG_TOPIC);
         mqtt_connected = true;
         mqtt_ever_connected = true;
         esp_mqtt_client_subscribe(event->client, MQTT_CMD_TOPIC, 1);
+        esp_mqtt_client_subscribe(event->client, MQTT_CFG_TOPIC, 1);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
@@ -46,16 +51,56 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         break;
 
     case MQTT_EVENT_DATA: {
-        // Prosty parser bez biblioteki JSON: kopiujemy payload do lokalnego,
-        // null-terminowanego bufora i sprawdzamy obecność "true". Payload
-        // z brokera nie jest null-terminowany, więc nie wolno go strstr-ować.
-        char buf[64] = {0};
-        int n = event->data_len < (int)sizeof(buf) - 1
-                    ? event->data_len : (int)sizeof(buf) - 1;
-        memcpy(buf, event->data, n);
-        alarm_armed = (strstr(buf, "true") != NULL);
-        ESP_LOGI(TAG, "Polecenie z panelu: alarm %s",
-                 alarm_armed ? "UZBROJONY" : "rozbrojony");
+        // event->topic jest ważny tylko na 1. fragmencie; fragmentowanych nie
+        // obsługujemy (payload cfg trzymamy < 1 KB, cmd jest malutki).
+        if (event->total_data_len != event->data_len) {
+            ESP_LOGW(TAG, "MQTT: pominięto fragmentowany payload (%d/%d B)",
+                     event->data_len, event->total_data_len);
+            break;
+        }
+
+        // Ani topic, ani payload z brokera nie są null-terminowane — porównujemy
+        // po długości, kopiujemy po długości.
+        const bool is_cmd = (event->topic_len == (int)strlen(MQTT_CMD_TOPIC) &&
+                             memcmp(event->topic, MQTT_CMD_TOPIC, event->topic_len) == 0);
+        const bool is_cfg = (event->topic_len == (int)strlen(MQTT_CFG_TOPIC) &&
+                             memcmp(event->topic, MQTT_CFG_TOPIC, event->topic_len) == 0);
+
+        if (is_cmd) {
+            // Bez zmian względem faz < 3: prosty odczyt flagi "armed".
+            // Przeniesienie na kolejkę = faza 4 (osobny commit).
+            char buf[64] = {0};
+            int n = event->data_len < (int)sizeof(buf) - 1
+                        ? event->data_len : (int)sizeof(buf) - 1;
+            memcpy(buf, event->data, n);
+            alarm_armed = (strstr(buf, "true") != NULL);
+            ESP_LOGI(TAG, "Polecenie z panelu: alarm %s",
+                     alarm_armed ? "UZBROJONY" : "rozbrojony");
+        } else if (is_cfg) {
+            if (mqtt_cmd_queue == NULL) {
+                ESP_LOGW(TAG, "cfg: kolejka jeszcze nie gotowa — pomijam.");
+                break;
+            }
+            // Handler jest jednowątkowy per klient -> static zamiast ~560 B na stosie.
+            // Publikacji z tego tasku NIE robimy (kontencja o mutex klienta MQTT
+            // = udokumentowany deadlock) — acki wysyła pętla radaru.
+            static mqtt_msg_t m;
+            int tl = event->topic_len < (int)sizeof(m.topic) - 1
+                         ? event->topic_len : (int)sizeof(m.topic) - 1;
+            memcpy(m.topic, event->topic, tl);
+            m.topic[tl] = '\0';
+            int pl = event->data_len < (int)sizeof(m.payload) - 1
+                         ? event->data_len : (int)sizeof(m.payload) - 1;
+            memcpy(m.payload, event->data, pl);
+            m.payload[pl] = '\0';
+            m.payload_len = (uint16_t)pl;
+            if (xQueueSend(mqtt_cmd_queue, &m, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "cfg: kolejka pełna — komunikat odrzucony.");
+            }
+        } else {
+            ESP_LOGD(TAG, "MQTT DATA z nieobsługiwanego tematu (topic_len=%d)",
+                     event->topic_len);
+        }
         break;
     }
 
@@ -238,9 +283,19 @@ void setup_mqtt(void)
 
     ESP_LOGI(TAG, "Uruchamiam klienta MQTT. Docelowy adres: %s", saved_mqtt_uri);
 
-    // 3. Konfigurujemy klienta znalezionym (lub awaryjnym) adresem
+    // 3. Konfigurujemy klienta znalezionym (lub awaryjnym) adresem.
+    //    LWT na osobny temat (NIE cfg/state — inaczej offline nadpisałby
+    //    retained snapshot configu, z którego wypełnia się panel). Pola
+    //    last_will MUSZĄ być ustawione przed esp_mqtt_client_init().
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = saved_mqtt_uri,
+        .session.last_will = {
+            .topic   = MQTT_STATUS_TOPIC,
+            .msg     = "{\"st\":\"offline\"}",
+            .msg_len = 0,      // 0 => strlen(msg)
+            .qos     = 1,
+            .retain  = true,
+        },
     };
 
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
