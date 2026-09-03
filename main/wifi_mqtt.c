@@ -1,5 +1,6 @@
 #include "wifi_mqtt.h"
 #include "captive_portal.h"
+#include "radar_cfg.h"   // cfg_json_u32() — parsowanie {"armed":...}
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -20,8 +21,9 @@ QueueHandle_t mqtt_cmd_queue = NULL;
 // FLAGA ssid, password
 volatile bool wifi_ready = false;
 
-// Flaga uzbrojenia alarmu — sterowana z panelu przez retained-temat
-// MQTT_CMD_TOPIC. Czytana przez pętlę alarmu w main.c.
+// Flaga uzbrojenia alarmu. Ustawiana w handlerze MQTT (temat MQTT_CMD_TOPIC)
+// oraz przez button_task; czytana przez pętlę alarmu w main.c. Podwójny writer
+// volatile bajtu jest benign (stan pre-existing).
 volatile bool alarm_armed = false;
 
 // Flagi stanu dla sygnalizacji RGB (status_led.c).
@@ -59,47 +61,58 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             break;
         }
 
-        // Ani topic, ani payload z brokera nie są null-terminowane — porównujemy
-        // po długości, kopiujemy po długości.
+        // Topic z brokera nie jest null-terminowany — porównujemy po długości.
         const bool is_cmd = (event->topic_len == (int)strlen(MQTT_CMD_TOPIC) &&
                              memcmp(event->topic, MQTT_CMD_TOPIC, event->topic_len) == 0);
         const bool is_cfg = (event->topic_len == (int)strlen(MQTT_CFG_TOPIC) &&
                              memcmp(event->topic, MQTT_CFG_TOPIC, event->topic_len) == 0);
 
         if (is_cmd) {
-            // Bez zmian względem faz < 3: prosty odczyt flagi "armed".
-            // Przeniesienie na kolejkę = faza 4 (osobny commit).
-            char buf[64] = {0};
+            // {"armed":true|false} — parsujemy TU (natychmiast, nie przez kolejkę
+            // cfg, żeby seria zmian configu nie opóźniła rozbrojenia alarmu).
+            // cfg_json_u32 celuje w pole "armed" -> koniec z false-positive
+            // strstr(buf,"true") na {"armed":false,"note":"true story"}.
+            char buf[96] = {0};
             int n = event->data_len < (int)sizeof(buf) - 1
                         ? event->data_len : (int)sizeof(buf) - 1;
             memcpy(buf, event->data, n);
-            alarm_armed = (strstr(buf, "true") != NULL);
-            ESP_LOGI(TAG, "Polecenie z panelu: alarm %s",
-                     alarm_armed ? "UZBROJONY" : "rozbrojony");
-        } else if (is_cfg) {
-            if (mqtt_cmd_queue == NULL) {
-                ESP_LOGW(TAG, "cfg: kolejka jeszcze nie gotowa — pomijam.");
-                break;
+            uint32_t v;
+            if (cfg_json_u32(buf, "armed", &v)) {
+                alarm_armed = (v != 0);
+                ESP_LOGI(TAG, "cmd: alarm %s.", alarm_armed ? "UZBROJONY" : "rozbrojony");
+            } else {
+                ESP_LOGW(TAG, "cmd: brak pola \"armed\" w: %.80s", buf);
             }
-            // Handler jest jednowątkowy per klient -> static zamiast ~560 B na stosie.
-            // Publikacji z tego tasku NIE robimy (kontencja o mutex klienta MQTT
-            // = udokumentowany deadlock) — acki wysyła pętla radaru.
-            static mqtt_msg_t m;
-            int tl = event->topic_len < (int)sizeof(m.topic) - 1
-                         ? event->topic_len : (int)sizeof(m.topic) - 1;
-            memcpy(m.topic, event->topic, tl);
-            m.topic[tl] = '\0';
-            int pl = event->data_len < (int)sizeof(m.payload) - 1
-                         ? event->data_len : (int)sizeof(m.payload) - 1;
-            memcpy(m.payload, event->data, pl);
-            m.payload[pl] = '\0';
-            m.payload_len = (uint16_t)pl;
-            if (xQueueSend(mqtt_cmd_queue, &m, 0) != pdTRUE) {
-                ESP_LOGW(TAG, "cfg: kolejka pełna — komunikat odrzucony.");
-            }
-        } else {
+            break;
+        }
+        if (!is_cfg) {
             ESP_LOGD(TAG, "MQTT DATA z nieobsługiwanego tematu (topic_len=%d)",
                      event->topic_len);
+            break;
+        }
+        if (mqtt_cmd_queue == NULL) {
+            ESP_LOGW(TAG, "cfg: kolejka jeszcze nie gotowa — pomijam.");
+            break;
+        }
+        // Za duży payload: odrzuć (NIE obcinaj po cichu — obcięty JSON parsuje
+        // się częściowo i aplikuje bez błędu).
+        if (event->data_len >= (int)sizeof(((mqtt_msg_t *)0)->payload)) {
+            ESP_LOGW(TAG, "cfg: payload %d B >= bufor — odrzucony.", event->data_len);
+            break;
+        }
+
+        // Handler jednowątkowy per klient -> static zamiast ~1 KB na stosie.
+        // Publikacji z tego tasku NIE robimy (kontencja o mutex klienta MQTT
+        // = udokumentowany deadlock) — acki wysyła pętla radaru.
+        static mqtt_msg_t m;
+        int tl = event->topic_len < (int)sizeof(m.topic) - 1
+                     ? event->topic_len : (int)sizeof(m.topic) - 1;
+        memcpy(m.topic, event->topic, tl);
+        m.topic[tl] = '\0';
+        memcpy(m.payload, event->data, event->data_len);
+        m.payload[event->data_len] = '\0';
+        if (xQueueSend(mqtt_cmd_queue, &m, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "cfg: kolejka pełna — komunikat odrzucony.");
         }
         break;
     }

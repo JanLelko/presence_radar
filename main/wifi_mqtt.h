@@ -46,13 +46,14 @@ extern volatile bool alarm_armed;
 #define MQTT_CFG_STATE_TOPIC  "pokoj/101/cfg/state"
 #define MQTT_STATUS_TOPIC     "pokoj/101/status"
 
-/* Komunikat z brokera przekazywany z tasku MQTT do pętli radaru. Kopiowany
- * by-value — task MQTT nie dotyka I2C ani configu, tylko wrzuca do kolejki;
- * pętla w main.c jest jedynym konsumentem, więc mutex nie jest potrzebny. */
+/* Komunikat konfiguracji (temat pokoj/101/cfg) przekazywany z tasku MQTT do
+ * pętli radaru. Kopiowany by-value — task MQTT nie parsuje, tylko wrzuca do
+ * kolejki; pętla w main.c jest jedynym konsumentem, więc mutex nie jest
+ * potrzebny. Payload NUL-terminowany; komunikaty >= sizeof(payload) są
+ * odrzucane w handlerze (nie obcinane po cichu). */
 typedef struct {
-    char     topic[48];
-    uint16_t payload_len;
-    char     payload[512];
+    char topic[48];
+    char payload[1024];
 } mqtt_msg_t;
 
 /* Kolejka komend (głęb. 4, by-value). Tworzona w app_main PRZED setup_mqtt();

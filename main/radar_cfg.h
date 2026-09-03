@@ -91,6 +91,11 @@ int radar_cfg_sanitize(radar_cfg_t *c, char warn[][RADAR_CFG_WARN_LEN], int max_
  * Payload konfiguracji jest płaski: pary "<klucz>": <liczba|true|false>, bez
  * zagnieżdżeń i tablic (patrz docs/parametry_radaru.md). */
 
+/* Szuka "<key>" w null-terminowanym JSON-ie; wyłuskuje liczbę dziesiętną albo
+ * true/false (->1/0). Zwraca false, gdy klucza nie ma lub po ':' nie stoi
+ * liczba. Współdzielone przez radar_cfg.c i edge_cfg.c. */
+bool cfg_json_u32(const char *json, const char *key, uint32_t *val);
+
 /* Nakłada na *c znalezione pary "<klucz>": <wartość> dla kluczy z RADAR_CFG_DESC.
  * Baza (*c) to zwykle aktualnie zaaplikowany config — panel wysyła tylko delty.
  * Jeśli payload zawiera "preset":"care"|"game", najpierw przeładowuje *c z tego

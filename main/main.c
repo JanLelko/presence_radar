@@ -20,19 +20,20 @@
 #include "board_pins.h" // Wszystkie piny GPIO w jednym miejscu
 #include "radar.h"      // Warstwa I2C do modułu XM125 (jedyny właściciel magistrali)
 #include "radar_cfg.h"  // Model konfiguracji radaru (struct + presety)
+#include "edge_cfg.h"   // Progi edge-computingu (POZAR/UPADEK/ZASIEDZENIE)
 #define MQTT_TOPIC "pokoj/101/radar"
 
 // Piny (PIN_LED, PIN_BUTTON, PIN_BUZZER, PIN_RADAR_INT) — patrz board_pins.h.
 // Magistrala I2C do radaru jest teraz w całości w radar.c.
 
-const uint32_t PODLOGA_MM = 2500;
-const uint32_t PROG_UPADKU = 1500;
-// Próg POŻARU: alarm leci, gdy chip_temp > MAX_TEMP. Ustawione nisko (20),
-// żeby dało się go wyzwolić chuchnięciem na czujnik (~21 °C i wyżej).
-// UWAGA demonstracyjna: jeśli w spoczynku temp na wykresie pokazuje już ≥21,
-// pożar będzie wisiał na stałe — podnieś tę wartość ~2-3 °C nad odczyt spoczynkowy.
-const uint16_t MAX_TEMP = 20;
-// ==========================================================
+// Okres pętli głównej [ms]. Liczniki czasowe (ZASIEDZENIE) przeliczają sekundy
+// na iteracje przez tę stałą — zmiana okresu nie rozjeżdża już progów.
+#define LOOP_PERIOD_MS 250
+
+// Progi POZAR/UPADEK/ZASIEDZENIE. Konfigurowane z panelu (pokoj/101/cfg -> edge:{}),
+// trwałe w NVS (edge_v1). Domyślny max_temp_c = 20 celowo nisko, żeby dało się
+// wyzwolić POZAR chuchnięciem na czujnik (jeśli spoczynkowa temp >= 21, podnieś).
+static edge_cfg_t g_edge;
 
 static const char *TAG = "RADAR_IOT";
 
@@ -46,9 +47,10 @@ static uint32_t             g_apply_ms;      // czas ostatniego apply [ms]
 static bool                 g_state_announced;// czy po (re)connect wysłano status+cfg/state
 
 static radar_cfg_t          s_cfg_target;
+static edge_cfg_t           s_edge_target;
 static radar_apply_result_t s_cfg_ar;
-static char                 s_cfg_warn[4][RADAR_CFG_WARN_LEN];
-static char                 s_cfg_state[1536];
+static char                 s_cfg_warn[6][RADAR_CFG_WARN_LEN];  // radar (<=4) + edge (<=1) + zapas
+static char                 s_cfg_state[2048];
 static mqtt_msg_t           s_cfg_msg;       // bufor odbioru z kolejki (~560 B — nie na stos)
 
 // Buduje i publikuje retained stan raportowany na pokoj/101/cfg/state.
@@ -88,71 +90,123 @@ static void publish_cfg_state(const char *st, const char *result,
         APP("%s\"%s\"", i ? "," : "", warn[i]);
     }
     APP("],\"radar\":{");
-
     if (u >= sizeof s_cfg_state) {
         return;
     }
-    int w = radar_cfg_to_json_fields(&g_applied_cfg, s_cfg_state + u, sizeof s_cfg_state - u);
-    if (w < 0) {
+    int wr = radar_cfg_to_json_fields(&g_applied_cfg, s_cfg_state + u, sizeof s_cfg_state - u);
+    if (wr < 0) {
         ESP_LOGW(TAG, "cfg/state: bufor za mały — nie publikuję.");
         return;
     }
-    u += (size_t)w;
+    u += (size_t)wr;
+
+    APP("},\"edge\":{");
+    if (u >= sizeof s_cfg_state) {
+        return;
+    }
+    int we = edge_cfg_to_json_fields(&g_edge, s_cfg_state + u, sizeof s_cfg_state - u);
+    if (we < 0) {
+        ESP_LOGW(TAG, "cfg/state: bufor za mały — nie publikuję.");
+        return;
+    }
+    u += (size_t)we;
     APP("}}");
     #undef APP
 
+    // Domykające "}}" mogło się nie zmieścić — nie publikuj obciętego JSON-a,
+    // panel robi JSON.parse na retained snapshot.
+    if (u >= sizeof s_cfg_state) {
+        ESP_LOGW(TAG, "cfg/state: JSON obcięty (%u B) — nie publikuję.", (unsigned)u);
+        return;
+    }
     esp_mqtt_client_publish(mqtt_client, MQTT_CFG_STATE_TOPIC, s_cfg_state, 0, 1, 1);
 }
 
-// Konsumuje jeden komunikat cfg z kolejki: parsuje delty na aktualnym configu,
-// clamp + sanitize, i jeśli coś się zmieniło — pełny RESET_MODULE + write-all
-// przez radar_apply_config() (blokujące ~2-3 s; pętla stoi, telemetria wraca po).
+// Konsumuje jeden komunikat cfg z kolejki. Payload może dotyczyć rejestrów
+// radaru ("<klucz radaru>"/"preset"), progów edge-logiki ("<klucz edge>"), albo
+// obu naraz. Radar: clamp+sanitize -> memcmp -> pełny RESET_MODULE + write-all
+// przez radar_apply_config() (blokujące ~0.7 s). Edge: brak I2C — podmiana +
+// zapis NVS. Warny obu stron trafiają do wspólnego cfg/state.
 static void apply_cfg_from_json(const mqtt_msg_t *m)
 {
-    s_cfg_target = g_applied_cfg;   // baza = aktualnie zaaplikowany config
+    s_cfg_target  = g_applied_cfg;   // baza = aktualnie zaaplikowany config radaru
+    s_edge_target = g_edge;
 
     char jerr[48] = {0};
-    if (!radar_cfg_from_json(&s_cfg_target, m->payload, jerr, sizeof jerr)) {
+    bool radar_ok  = radar_cfg_from_json(&s_cfg_target, m->payload, jerr, sizeof jerr);
+    int  edge_hits = edge_cfg_from_json(&s_edge_target, m->payload);
+
+    if (!radar_ok && edge_hits == 0) {
         ESP_LOGW(TAG, "cfg: odrzucony JSON (%s): %.120s", jerr, m->payload);
         publish_cfg_state("run", "bad_json", 0, NULL, 0);
         return;
     }
 
-    int clamped = radar_cfg_clamp(&s_cfg_target);
-    int nwarn   = radar_cfg_sanitize(&s_cfg_target, s_cfg_warn, 4);
+    int clamped = 0;
+    if (radar_ok) {
+        clamped += radar_cfg_clamp(&s_cfg_target);
+    }
+    clamped += edge_cfg_clamp(&s_edge_target);
 
-    if (memcmp(&s_cfg_target, &g_applied_cfg, sizeof s_cfg_target) == 0) {
-        ESP_LOGI(TAG, "cfg: identyczny z aktualnym — bez RESET/apply.");
-        publish_cfg_state("run", "nochange", clamped, s_cfg_warn, nwarn);
-        return;
+    int nwarn = 0;
+    if (radar_ok) {
+        nwarn = radar_cfg_sanitize(&s_cfg_target, s_cfg_warn, 4);
+    }
+    nwarn += edge_cfg_sanitize(&s_edge_target,
+                               radar_ok ? s_cfg_target.end_mm : g_applied_cfg.end_mm,
+                               &s_cfg_warn[nwarn], (int)(sizeof s_cfg_warn / RADAR_CFG_WARN_LEN) - nwarn);
+
+    bool radar_changed = radar_ok &&
+        memcmp(&s_cfg_target, &g_applied_cfg, sizeof s_cfg_target) != 0;
+    bool edge_changed = memcmp(&s_edge_target, &g_edge, sizeof s_edge_target) != 0;
+
+    // --- Radar NAJPIERW (może się nie udać) ---
+    if (radar_changed) {
+        ESP_LOGI(TAG, "cfg: nowa konfiguracja radaru (clamped=%d, warn=%d) — RESET_MODULE + write-all.",
+                 clamped, nwarn);
+        publish_cfg_state("cfg", NULL, clamped, s_cfg_warn, nwarn);
+
+        int64_t t0 = esp_timer_get_time();
+        esp_err_t e = radar_apply_config(&s_cfg_target, &s_cfg_ar);
+        g_apply_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+
+        if (e != ESP_OK) {
+            // Twardy błąd I2C — przywróć poprzednią, NIE ruszaj progów edge
+            // (panel zobaczyłby "apply_fail" a progi upadku/pożaru by się zmieniły).
+            ESP_LOGE(TAG, "cfg: radar_apply_config twardy błąd (%s) — przywracam poprzednią, edge bez zmian.",
+                     esp_err_to_name(e));
+            radar_apply_config(&g_applied_cfg, &s_cfg_ar);
+            g_last_apply = s_cfg_ar;
+            publish_cfg_state("error", "apply_fail", clamped, s_cfg_warn, nwarn);
+            return;
+        }
+
+        g_applied_cfg = s_cfg_target;
+        g_last_apply  = s_cfg_ar;
+        if (radar_cfg_save(&g_applied_cfg) != ESP_OK) {
+            ESP_LOGW(TAG, "cfg: zapis radaru do NVS nieudany (działa, nie przetrwa restartu).");
+        }
+        ESP_LOGI(TAG, "cfg: radar zaaplikowany w %lu ms (det_status=0x%08lx, verify=%d).",
+                 (unsigned long)g_apply_ms, (unsigned long)s_cfg_ar.detector_status,
+                 s_cfg_ar.verify_ok);
     }
 
-    ESP_LOGI(TAG, "cfg: nowa konfiguracja (clamped=%d, warn=%d) — RESET_MODULE + write-all.",
-             clamped, nwarn);
-    publish_cfg_state("cfg", NULL, clamped, s_cfg_warn, nwarn);
-
-    int64_t t0 = esp_timer_get_time();
-    esp_err_t e = radar_apply_config(&s_cfg_target, &s_cfg_ar);
-    g_apply_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
-
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "cfg: radar_apply_config twardy błąd I2C (%s) — przywracam poprzednią.",
-                 esp_err_to_name(e));
-        radar_apply_config(&g_applied_cfg, &s_cfg_ar);   // best effort, stan bez zmiany
-        g_last_apply = s_cfg_ar;
-        publish_cfg_state("error", "apply_fail", clamped, s_cfg_warn, nwarn);
-        return;
+    // --- Edge DOPIERO gdy radar OK (albo go nie ruszano). Bez I2C. ---
+    if (edge_changed) {
+        g_edge = s_edge_target;
+        if (edge_cfg_save(&g_edge) != ESP_OK) {
+            ESP_LOGW(TAG, "edge: zapis do NVS nieudany.");
+        }
+        ESP_LOGI(TAG, "edge: podloga_mm=%lu prog_upadku=%lu max_temp_c=%lu zasiedzenie_s=%lu",
+                 (unsigned long)g_edge.podloga_mm, (unsigned long)g_edge.prog_upadku,
+                 (unsigned long)g_edge.max_temp_c, (unsigned long)g_edge.zasiedzenie_s);
     }
 
-    g_applied_cfg = s_cfg_target;
-    g_last_apply  = s_cfg_ar;
-    if (radar_cfg_save(&g_applied_cfg) != ESP_OK) {
-        ESP_LOGW(TAG, "cfg: zapis do NVS nieudany (config działa, ale nie przetrwa restartu).");
+    const char *result = (radar_changed || edge_changed) ? "ok" : "nochange";
+    if (!radar_changed) {
+        ESP_LOGI(TAG, "cfg: radar bez zmian%s.", edge_changed ? " (edge zaktualizowane)" : "");
     }
-    ESP_LOGI(TAG, "cfg: zaaplikowano w %lu ms (det_status=0x%08lx, verify=%d).",
-             (unsigned long)g_apply_ms, (unsigned long)s_cfg_ar.detector_status,
-             s_cfg_ar.verify_ok);
-    publish_cfg_state("run", "ok", clamped, s_cfg_warn, nwarn);
+    publish_cfg_state("run", result, clamped, s_cfg_warn, nwarn);
 }
 
 // 3 krótkie sygnały: dioda + buzzer (potwierdzenie resetu konfiguracji)
@@ -174,7 +228,8 @@ static void kasuj_konfiguracje(void) {
         nvs_erase_key(h, "wifi_ssid");
         nvs_erase_key(h, "wifi_pass");
         nvs_erase_key(h, "mqtt_uri");
-        nvs_erase_key(h, "cfg_v1");   // reset fabryczny czyści też config radaru
+        nvs_erase_key(h, "cfg_v1");    // reset fabryczny czyści też config radaru
+        nvs_erase_key(h, "edge_v1");   // ...i progi edge-logiki
         nvs_commit(h);
         nvs_close(h);
     }
@@ -310,9 +365,25 @@ void app_main(void) {
     }
     radar_cfg_clamp(&boot_cfg);
     int64_t boot_t0 = esp_timer_get_time();
-    radar_apply_config(&boot_cfg, &g_last_apply);
+    esp_err_t boot_err = radar_apply_config(&boot_cfg, &g_last_apply);
     g_apply_ms = (uint32_t)((esp_timer_get_time() - boot_t0) / 1000);
+    if (boot_err != ESP_OK) {
+        // Twardy błąd I2C / moduł nie wstał — nie ma lepszego fallbacku niż
+        // przyjąć boot_cfg jako "zamierzony". Loguj głośno; cfg/state pokaże
+        // measuring=0 / złe det_status.
+        ESP_LOGE(TAG, "Bring-up radaru zwrócił %s — stan configu może nie odpowiadać modułowi.",
+                 esp_err_to_name(boot_err));
+    }
     g_applied_cfg = boot_cfg;
+
+    // Progi edge-logiki: z NVS albo defaulty.
+    if (edge_cfg_load(&g_edge) == ESP_OK) {
+        ESP_LOGI(TAG, "Progi edge wczytane z NVS.");
+    } else {
+        ESP_LOGI(TAG, "Brak/niepoprawne progi edge w NVS — defaulty.");
+        g_edge = edge_cfg_default();
+    }
+    edge_cfg_clamp(&g_edge);
     ESP_LOGI(TAG, "Radar uruchomiony. Wchodzę w pętlę.");
 
     // Przycisk obsługuje osobny task (próbkowanie + debounce, niezależnie od pętli).
@@ -328,19 +399,11 @@ void app_main(void) {
 
     // 4. Pętla Główna
     while(1) {
-            // --- Konfiguracja z panelu: opróżnij kolejkę (faza 3) ---
-            // radar_apply_config() jest blokujące ~2-3 s; wyciszamy buzzer i
-            // zerujemy licznik, żeby blokada nie zostawiła go włączonego w połowie
-            // cyklu. Telemetria wraca w kolejnej iteracji.
-            if (mqtt_cmd_queue != NULL && uxQueueMessagesWaiting(mqtt_cmd_queue) > 0) {
-                gpio_set_level(PIN_BUZZER, 0);
-                alarm_tick = 0;
-                while (xQueueReceive(mqtt_cmd_queue, &s_cfg_msg, 0) == pdTRUE) {
-                    apply_cfg_from_json(&s_cfg_msg);
-                }
-            }
-
             // Pierwsza publikacja statusu + stanu configu po (re)połączeniu MQTT.
+            // MUSI być przed drenowaniem kolejki: retained pokoj/101/cfg jest
+            // redostarczany przy reconnect i trafia do kolejki; gdyby announce
+            // szło po drenażu, nadpisałoby świeży cfg/state ("ok"+warny) swoim
+            // "boot"+clamped:0.
             if (mqtt_connected && !g_state_announced) {
                 if (mqtt_client != NULL) {
                     esp_mqtt_client_publish(mqtt_client, MQTT_STATUS_TOPIC,
@@ -350,6 +413,18 @@ void app_main(void) {
                 g_state_announced = true;
             } else if (!mqtt_connected) {
                 g_state_announced = false;
+            }
+
+            // --- Konfiguracja z panelu: opróżnij kolejkę (temat cfg) ---
+            // apply_cfg_from_json() bywa blokujące (~0.7 s przy zmianie radaru);
+            // wyciszamy buzzer i zerujemy licznik, żeby blokada nie zostawiła go
+            // włączonego w połowie cyklu. Telemetria wraca w kolejnej iteracji.
+            if (mqtt_cmd_queue != NULL && uxQueueMessagesWaiting(mqtt_cmd_queue) > 0) {
+                gpio_set_level(PIN_BUZZER, 0);
+                alarm_tick = 0;
+                while (xQueueReceive(mqtt_cmd_queue, &s_cfg_msg, 0) == pdTRUE) {
+                    apply_cfg_from_json(&s_cfg_msg);
+                }
             }
 
             radar_frame_t fr;
@@ -364,16 +439,19 @@ void app_main(void) {
                 bool is_present      = fr.is_present;
                 char stan_alarmowy[32] = "OK";
 
-                // LOGIKA EDGE COMPUTING
-                if (chip_temp > MAX_TEMP) {
+                // LOGIKA EDGE COMPUTING — progi z g_edge (panel / NVS).
+                uint32_t podloga_gate = (g_edge.podloga_mm > 400) ? (g_edge.podloga_mm - 400) : 0;
+                if (chip_temp > g_edge.max_temp_c) {
                     strcpy(stan_alarmowy, "POZAR");
-                } else if (intra_score > PROG_UPADKU && distance_mm > (PODLOGA_MM - 400)) {
+                } else if (intra_score > g_edge.prog_upadku && distance_mm > podloga_gate) {
                     strcpy(stan_alarmowy, "UPADEK");
                 }
 
+                // Próg ZASIEDZENIA w sekundach -> iteracje pętli.
+                uint32_t zasiedzenie_petli = g_edge.zasiedzenie_s * 1000u / LOOP_PERIOD_MS;
                 if (is_present && intra_score < 500 && inter_score > 1000) {
                     czas_siedzenia++;
-                    if (czas_siedzenia > 1200) strcpy(stan_alarmowy, "ZASIEDZENIE");
+                    if (czas_siedzenia > zasiedzenie_petli) strcpy(stan_alarmowy, "ZASIEDZENIE");
                 } else if (intra_score > 1000) {
                     czas_siedzenia = 0;
                 } else {
@@ -439,6 +517,6 @@ void app_main(void) {
                 gpio_set_level(PIN_BUZZER, 0);
             }
 
-            vTaskDelay(pdMS_TO_TICKS(250)); // Szybkość odczytu z czujnika: 4x na sekundę
+            vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS)); // odczyt z czujnika ~4x/s
         }
     }

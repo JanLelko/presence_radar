@@ -4,6 +4,7 @@ idf_component_register(
         "wifi_mqtt.c"
         "radar.c"
         "radar_cfg.c"
+        "edge_cfg.c"
         "captive_portal.c"
         "dns_server.c"
         "status_led.c"

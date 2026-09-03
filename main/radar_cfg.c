@@ -133,12 +133,16 @@ int radar_cfg_sanitize(radar_cfg_t *c, char warn[][RADAR_CFG_WARN_LEN], int max_
         c->intra_detection_enabled = 1;
     }
 
-    /* manual_profile / manual_step_length są ignorowane przy auto=1 — tylko info. */
-    if (c->auto_profile_enabled) {
-        PUSH_WARN("auto_profile=1 — manual_profile ignorowany przez modul");
+    /* manual_profile / manual_step_length ignorowane przy auto=1 — ostrzegamy
+     * tylko gdy user faktycznie ustawił je inaczej niż default (inaczej świeże
+     * urządzenie na preselcie CARE zawsze miałoby dwa szumowe warny). */
+    if (c->auto_profile_enabled && c->manual_profile != 4) {
+        PUSH_WARN("auto_profile=1 — manual_profile (%lu) ignorowany",
+                  (unsigned long)c->manual_profile);
     }
-    if (c->auto_step_length_enabled) {
-        PUSH_WARN("auto_step_length=1 — manual_step_length ignorowany przez modul");
+    if (c->auto_step_length_enabled && c->manual_step_length != 72) {
+        PUSH_WARN("auto_step_length=1 — manual_step_length (%lu) ignorowany",
+                  (unsigned long)c->manual_step_length);
     }
 
     #undef PUSH_WARN
@@ -149,42 +153,45 @@ int radar_cfg_sanitize(radar_cfg_t *c, char warn[][RADAR_CFG_WARN_LEN], int max_
 
 /* Szuka "<key>" w null-terminowanym JSON-ie i wyłuskuje wartość: liczbę
  * dziesiętną albo true/false. Płaski skan wystarcza — payload cfg nie ma
- * zagnieżdżeń. Cudzysłowy w igle chronią przed kolizją prefiksów kluczy. */
-static bool json_find_u32(const char *json, const char *key, uint32_t *val)
+ * zagnieżdżeń. Cudzysłowy w igle chronią przed kolizją prefiksów kluczy;
+ * jeśli po dopasowaniu nie stoi ':' (czyli trafiliśmy na "<key>" wewnątrz
+ * wartości-stringa), szukamy dalej. Nie-static: współdzielone z edge_cfg.c. */
+static const char *skip_ws(const char *p)
+{
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    return p;
+}
+
+bool cfg_json_u32(const char *json, const char *key, uint32_t *val)
 {
     char needle[48];
     int nl = snprintf(needle, sizeof needle, "\"%s\"", key);
     if (nl < 0 || nl >= (int)sizeof needle) {
         return false;
     }
-    const char *p = strstr(json, needle);
-    if (p == NULL) {
-        return false;
+    for (const char *p = strstr(json, needle); p != NULL; p = strstr(p + 1, needle)) {
+        const char *q = skip_ws(p + nl);
+        if (*q != ':') {
+            continue;   /* "<key>" nie jako klucz (np. w wartości) — szukaj dalej */
+        }
+        q = skip_ws(q + 1);
+        if (strncmp(q, "true", 4) == 0) {
+            *val = 1;
+            return true;
+        }
+        if (strncmp(q, "false", 5) == 0) {
+            *val = 0;
+            return true;
+        }
+        if (*q >= '0' && *q <= '9') {
+            *val = (uint32_t)strtoul(q, NULL, 10);
+            return true;
+        }
+        return false;   /* klucz jest, ale wartość nie jest liczbą/bool */
     }
-    p += nl;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
-    }
-    if (*p != ':') {
-        return false;
-    }
-    p++;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-        p++;
-    }
-    if (strncmp(p, "true", 4) == 0) {
-        *val = 1;
-        return true;
-    }
-    if (strncmp(p, "false", 5) == 0) {
-        *val = 0;
-        return true;
-    }
-    if (*p < '0' || *p > '9') {
-        return false;
-    }
-    *val = (uint32_t)strtoul(p, NULL, 10);
-    return true;
+    return false;
 }
 
 bool radar_cfg_from_json(radar_cfg_t *c, const char *json, char *err, size_t errn)
@@ -203,21 +210,27 @@ bool radar_cfg_from_json(radar_cfg_t *c, const char *json, char *err, size_t err
         FAIL("nie obiekt JSON");
     }
 
-    /* Opcjonalny "preset": przeładuj bazę przed nałożeniem delt. */
+    /* Opcjonalny "preset":"care"|"game" — przeładuj bazę przed nałożeniem delt.
+     * Parsujemy wartość TUŻ za kluczem (nie strstr po całym payloadzie, żeby
+     * literalne "game" w innym polu nie wybrało presetu). */
     const char *pr = strstr(json, "\"preset\"");
     if (pr != NULL) {
-        if (strstr(pr, "\"game\"") != NULL) {
-            *c = radar_cfg_preset(CFG_PRESET_GAME);
-        } else if (strstr(pr, "\"care\"") != NULL) {
-            *c = radar_cfg_preset(CFG_PRESET_CARE);
+        const char *q = skip_ws(pr + 8 /* strlen("\"preset\"") */);
+        if (*q == ':') {
+            q = skip_ws(q + 1);
+            if (strncmp(q, "\"game\"", 6) == 0) {
+                *c = radar_cfg_preset(CFG_PRESET_GAME);
+            } else if (strncmp(q, "\"care\"", 6) == 0) {
+                *c = radar_cfg_preset(CFG_PRESET_CARE);
+            }
+            /* inne (np. "custom") = brak przeładowania, delty na *c */
         }
-        /* inne wartości (np. "custom") = brak przeładowania, delty na *c */
     }
 
     int hits = 0;
     for (size_t i = 0; i < RADAR_CFG_N; i++) {
         uint32_t v;
-        if (json_find_u32(json, RADAR_CFG_DESC[i].key, &v)) {
+        if (cfg_json_u32(json, RADAR_CFG_DESC[i].key, &v)) {
             *field_ptr(c, i) = v;
             hits++;
         }
