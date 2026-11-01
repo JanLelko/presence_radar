@@ -8,7 +8,7 @@ Radarowy czujnik obecności, upadków i zasiedzenia.
 ESP32-C6 + Acconeer XM125 (A121), MQTT, panel w przeglądarce.
 
 <!-- Plik: docs/img/main.png -->
-[obraz main]
+
 
 <img src="docs/img/main.png" alt="Presence Radar" width="90%">
 
@@ -30,7 +30,7 @@ Dashboard w przeglądarce (MQTT over WebSockets) wyświetla stan pokoi na żywo.
   <tr>
     <td align="center" width="50%">
       <!-- Plik: docs/img/panel.png -->
-      [zdjecie panelu]<br>
+      <br>
       <img src="docs/img/panel.png" alt="Panel" width="100%">
     </td>
     <td align="center" width="50%">
