@@ -26,20 +26,19 @@ Dashboard w przeglądarce (MQTT over WebSockets) wyświetla stan pokoi na żywo.
 - Parametry radaru i progi alarmów zmieniane z panelu przez MQTT, bez ponownego wgrywania firmware.
 - Sygnalizacja stanu: LED RGB (WS2812), dioda na PCB, buzzer.
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <!-- Plik: docs/img/panel.png -->
-      <br>
-      <img src="docs/img/panel.png" alt="Panel" width="100%">
-    </td>
-    <td align="center" width="50%">
-      <!-- Plik: docs/img/urzadzenie.jpg -->
-      [zdjecie urzadzenia]<br>
-      <img src="docs/img/urzadzenie.jpg" alt="Urządzenie" width="100%">
-    </td>
-  </tr>
-</table>
+<div align="center">
+
+<!-- Plik: docs/img/panel.png -->
+<img src="docs/img/panel.png" alt="Panel" width="100%">
+
+<sub>Panel (dashboard)</sub>
+
+<!-- Plik: docs/img/urzadzenie.jpg -->
+<img src="docs/img/urzadzenie.jpg" alt="Urządzenie" width="60%">
+
+<sub>Urządzenie</sub>
+
+</div>
 
 ## Architektura
 
