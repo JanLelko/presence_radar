@@ -2,7 +2,10 @@
 #define WIFI_MQTT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "mqtt_client.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 /*
  * Globalny uchwyt do klienta MQTT — definiowany w wifi_mqtt.c, a tu jedynie
@@ -35,8 +38,26 @@ extern volatile bool alarm_armed;
 /* Temat poleceń panel -> radar (subskrypcja + publikacja rozbrojenia). */
 #define MQTT_CMD_TOPIC "pokoj/101/cmd"
 
+/* Konfiguracja radaru:
+ *  - MQTT_CFG_TOPIC       panel -> radar, retained: delty configu (JSON płaski)
+ *  - MQTT_CFG_STATE_TOPIC radar -> świat, retained: stan raportowany (panel się stąd wypełnia)
+ *  - MQTT_STATUS_TOPIC    radar -> świat, retained: {"st":"online"|"offline"} (LWT) */
+#define MQTT_CFG_TOPIC        "pokoj/101/cfg"
+#define MQTT_CFG_STATE_TOPIC  "pokoj/101/cfg/state"
+#define MQTT_STATUS_TOPIC     "pokoj/101/status"
 
+/* Komunikat konfiguracji (temat pokoj/101/cfg) przekazywany z tasku MQTT do
+ * pętli radaru. Kopiowany by-value — task MQTT nie parsuje, tylko wrzuca do
+ * kolejki; pętla w main.c jest jedynym konsumentem, więc mutex nie jest
+ * potrzebny. Payload NUL-terminowany; komunikaty >= sizeof(payload) są
+ * odrzucane w handlerze (nie obcinane po cichu). */
+typedef struct {
+    char topic[48];
+    char payload[1024];
+} mqtt_msg_t;
 
-
+/* Kolejka komend (głęb. 4, by-value). Tworzona w app_main PRZED setup_mqtt();
+ * NULL, dopóki nie utworzona — handler MQTT musi to sprawdzić. */
+extern QueueHandle_t mqtt_cmd_queue;
 
 #endif /* WIFI_MQTT_H */

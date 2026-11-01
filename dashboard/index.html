@@ -178,6 +178,91 @@
             font-size: 12px; font-weight: 600; color: var(--text-muted);
             text-transform: uppercase; margin-bottom: 6px;
         }
+
+        /* === Panel konfiguracji radaru — ten sam język wizualny co karty === */
+        #cfg-gear {
+            background: var(--glass-bg); color: var(--text-main); border: 1px solid var(--glass-border-top);
+            width: 42px; height: 42px; border-radius: 12px; cursor: pointer; font-size: 18px; line-height: 1;
+            display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);
+        }
+        #cfg-gear:hover { background: rgba(0, 122, 255, 0.2); }
+
+        #cfg-overlay {
+            position: fixed; inset: 0; z-index: 1100; background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            display: none; align-items: flex-start; justify-content: center;
+            padding: 48px 16px; overflow-y: auto;
+        }
+        #cfg-overlay.open { display: flex; }
+
+        .cfg-modal {
+            width: 740px; max-width: 100%;
+            background: var(--bg-base);
+            border-top: 1px solid var(--glass-border-top); border-left: 1px solid var(--glass-border-top);
+            border-right: 1px solid var(--glass-border-right); border-bottom: 1px solid var(--glass-border-right);
+            border-radius: 22px; padding: 30px 32px;
+            box-shadow: var(--card-shadow), 0 30px 90px rgba(0, 0, 0, 0.28);
+        }
+        .cfg-modal h2 { margin: 0; font-weight: 700; letter-spacing: -0.4px; font-size: 1.4rem; }
+        .cfg-sub { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+        .cfg-group-title {
+            font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);
+            letter-spacing: 1px; margin: 26px 0 14px;
+        }
+
+        .cfg-row {
+            display: grid; grid-template-columns: 1fr 76px; column-gap: 16px; row-gap: 7px;
+            align-items: center; margin-bottom: 20px;
+        }
+        .cfg-row > label {
+            grid-column: 1; justify-self: start; font-weight: 600; font-size: 13.5px; cursor: help;
+            border-bottom: 1px dotted var(--text-muted); padding-bottom: 1px;
+        }
+        .cfg-row > label:focus { outline: 2px solid rgba(0, 122, 255, 0.6); outline-offset: 3px; border-radius: 2px; }
+        .cfg-row input[type=range] { grid-column: 1; width: 100%; accent-color: #007aff; height: 6px; }
+        .cfg-row input[type=number] {
+            grid-column: 2; grid-row: 1 / span 3; align-self: stretch; width: 100%;
+            padding: 8px 6px; border-radius: 12px; text-align: center;
+            border: 1px solid var(--glass-border-right); background: var(--glass-bg);
+            color: var(--text-main); font-family: inherit; font-weight: 700; font-size: 15px;
+            -moz-appearance: textfield;
+        }
+        .cfg-row input[type=number]::-webkit-outer-spin-button,
+        .cfg-row input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .cfg-row input[type=number]:focus { outline: none; border-color: rgba(0, 122, 255, 0.6); }
+        .cfg-ends {
+            grid-column: 1; display: flex; justify-content: space-between; gap: 12px;
+            font-size: 11px; color: var(--text-muted);
+        }
+
+        .cfg-actions { display: flex; gap: 10px; margin-top: 28px; }
+        .cfg-btn {
+            flex: 1; padding: 13px; border-radius: 14px; border: none; cursor: pointer;
+            font-family: inherit; font-weight: 700; font-size: 14px; transition: filter 0.2s;
+        }
+        .cfg-btn:hover { filter: brightness(1.08); }
+        .cfg-btn.primary { background: #007aff; color: #fff; }
+        .cfg-btn.ghost { background: var(--glass-bg); color: var(--text-main); border: 1px solid var(--glass-border-top); }
+        .cfg-btn.close { background: transparent; color: var(--text-muted); flex: 0 0 auto; padding: 13px 18px; }
+
+        #cfg-status {
+            margin-top: 18px; font-size: 12.5px; line-height: 1.5; padding: 12px 14px; border-radius: 14px;
+            background: var(--glass-bg); border: 1px solid var(--glass-border-right); white-space: pre-wrap;
+        }
+        #cfg-status .cfg-src { color: var(--text-muted); }
+        #cfg-status .cfg-warn { color: var(--color-warning); margin-top: 8px; }
+
+        .cfg-tip {
+            position: fixed; z-index: 1200; max-width: 320px; pointer-events: none;
+            background: var(--bg-base); color: var(--text-main);
+            border-top: 1px solid var(--glass-border-top); border-left: 1px solid var(--glass-border-top);
+            border-right: 1px solid var(--glass-border-right); border-bottom: 1px solid var(--glass-border-right);
+            border-radius: 12px; padding: 11px 13px; font-size: 12.5px; line-height: 1.5;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+            opacity: 0; transform: translateY(4px); transition: opacity 0.15s, transform 0.15s;
+        }
+        .cfg-tip.show { opacity: 1; transform: translateY(0); }
     </style>
 </head>
 <body>
@@ -191,6 +276,7 @@
     <div class="header">
         <h1>Centrum Monitoringu</h1>
         <div class="top-controls">
+            <button id="cfg-gear" title="Konfiguracja radaru" aria-label="Konfiguracja">&#9881;</button>
             <button id="toggle-terminal" title="Terminal" aria-label="Terminal">&gt;_</button>
             <div class="theme-switch-wrapper">
                 <label class="switch"><input type="checkbox" id="toggleTheme"><span class="slider"></span></label>
@@ -217,6 +303,21 @@
                     <div class="mini-chart-title">Dystans (mm)</div>
                     <div class="mini-chart"><canvas id="distChart"></canvas></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="cfg-overlay">
+        <div class="cfg-modal">
+            <h2>Konfiguracja radaru</h2>
+            <div class="cfg-sub" id="cfg-room-label">Pokój —</div>
+            <div class="cfg-sub">Wartości spoza zakresu radar dociska sam; ostrzeżenia poniżej.</div>
+            <div id="cfg-fields"></div>
+            <div id="cfg-status">Wczytywanie stanu z pokoj/&lt;x&gt;/cfg/state…</div>
+            <div class="cfg-actions">
+                <button class="cfg-btn primary" id="cfg-apply">Zastosuj</button>
+                <button class="cfg-btn ghost" id="cfg-reset">Reset do CARE</button>
+                <button class="cfg-btn close" id="cfg-close">Zamknij</button>
             </div>
         </div>
     </div>
@@ -588,7 +689,8 @@
             brokerConnected = true;
             appendLog('SYSTEM', 'Połączono z serwerem MQTT! Nasłuchuję...');
             client.subscribe('pokoj/+/radar');
-            client.subscribe('pokoj/+/cmd');   // stan uzbrojenia (retained, też z radaru)
+            client.subscribe('pokoj/+/cmd');        // stan uzbrojenia (retained, też z radaru)
+            client.subscribe('pokoj/+/cfg/state');  // stan konfiguracji radaru (retained)
             refreshAlarmState();
         });
 
@@ -617,7 +719,7 @@
                 const topicParts = topic.split('/');
                 if (topicParts.length < 3) return;
                 const roomNumber = topicParts[1];
-                const kind = topicParts[2];
+                const kind = topicParts.slice(2).join('/');   // radar | cmd | cfg/state | status
 
                 // Polecenie (retained) — z panelu lub z radaru: synchronizuj switch.
                 if (kind === 'cmd') {
@@ -627,6 +729,15 @@
                     refreshAlarmState();
                     return;
                 }
+
+                // Stan konfiguracji radaru (retained) — zasila panel ⚙.
+                if (kind === 'cfg/state') {
+                    handleCfgState(roomNumber, data);
+                    return;
+                }
+
+                // Nieznany sufiks (np. echo gołego 'cfg') — ignoruj, NIE twórz karty.
+                if (kind !== 'radar') return;
 
                 // Pomiar z radaru.
                 createOrUpdateRoom(roomNumber, data);
@@ -647,6 +758,205 @@
             } catch (e) {
                 console.error("Błąd parsowania JSON:", e);
             }
+        });
+
+        // ==========================================
+        // 7. Panel konfiguracji radaru
+        //    pokoj/<x>/cfg        (panel -> radar, retained, delty)
+        //    pokoj/<x>/cfg/state  (radar -> panel, retained, pełny stan)
+        // def = wartość domyślna z firmware (preset CARE / defaulty edge).
+        // lo / hi = opis lewego i prawego końca suwaka.
+        // ==========================================
+        const CFG_GROUPS = [
+            { id: 'radar', title: 'Radar — strefa i czułość', params: [
+                { key: 'start_mm', label: 'Początek strefy [mm]', min: 0, max: 10000, def: 300,
+                  lo: 'tuż przy czujniku', hi: 'z dala od czujnika',
+                  desc: 'Od jakiej odległości od czujnika zaczyna się obserwowany obszar. Wszystko bliżej jest pomijane — pomaga, gdy tuż przy radarze porusza się firanka albo wentylator.' },
+                { key: 'end_mm', label: 'Koniec strefy [mm]', min: 100, max: 10000, def: 2500,
+                  lo: 'krótki zasięg', hi: 'długi zasięg',
+                  desc: 'Dokąd sięga obserwowany obszar. Cele dalej niż to są pomijane. Krótszy zakres to mniej fałszywych wykryć zza ściany, ale i krótszy zasięg.' },
+                { key: 'hwaas', label: 'Uśrednianie sygnału (HWAAS)', min: 1, max: 511, def: 32,
+                  lo: 'szybko, krótki zasięg', hi: 'wolno, duży zasięg',
+                  desc: 'Ile surowych próbek radar uśrednia na jeden pomiar. Więcej daje większy zasięg i czystszy sygnał, ale mniej pomiarów na sekundę i większy pobór prądu.' },
+                { key: 'sweeps_per_frame', label: 'Sweepy na ramkę', min: 1, max: 4095, def: 16,
+                  lo: 'szybciej', hi: 'czulej, wolniej',
+                  desc: 'Ile omiotów wiązki składa się na jedną ramkę pomiarową. Więcej pozwala wychwycić słabszy ruch, ale ramka trwa dłużej, więc reakcja jest wolniejsza.' },
+                { key: 'frame_rate_mhz', label: 'Częstotliwość ramek [mHz]', min: 1000, max: 30000, def: 12000,
+                  lo: 'rzadziej, mniej prądu', hi: 'częściej, szybsza reakcja',
+                  desc: 'Ile ramek pomiarowych na sekundę (w milihercach — 12000 to 12 Hz). Wyżej skraca opóźnienie wykrycia, ale przy dużym uśrednianiu radar może nie nadążać.' },
+                { key: 'intra_detection_threshold', label: 'Próg szybkiego ruchu', min: 0, max: 5000, def: 1300,
+                  lo: 'łapie słaby ruch', hi: 'tylko mocny ruch',
+                  desc: 'Ile energii szybkiego ruchu musi zobaczyć radar, żeby uznać to za ruch. Niżej reaguje na drobne gesty i upadek, ale łatwiej o fałszywy alarm.' },
+                { key: 'inter_detection_threshold', label: 'Próg wolnego ruchu', min: 0, max: 5000, def: 1000,
+                  lo: 'łatwo widzi obecność', hi: 'tylko wyraźny ruch',
+                  desc: 'Próg dla powolnego ruchu i osoby, która stoi lub siedzi bez ruchu. Niżej pewniej utrzymuje wykrycie nieruchomej osoby, ale bardziej łapie się na przeciągi.' },
+                { key: 'intra_output_time_const', label: 'Wygładzanie szybkiego kanału [ms]', min: 10, max: 20000, def: 300,
+                  lo: 'reaguje od razu', hi: 'gładko, z opóźnieniem',
+                  desc: 'Jak mocno wygładzany jest sygnał szybkiego ruchu przed zgłoszeniem. Mniej to natychmiastowa reakcja kosztem skoków, więcej to spokojniejszy, ale opóźniony sygnał.' },
+            ]},
+            { id: 'edge', title: 'Progi alarmów', params: [
+                { key: 'podloga_mm', label: 'Dystans do podłogi [mm]', min: 1000, max: 6000, def: 2500,
+                  lo: 'czujnik nisko', hi: 'czujnik wysoko',
+                  desc: 'Zmierzona odległość od czujnika do podłogi. Wykrywanie upadku porównuje z nią dystans do celu, więc musi odpowiadać rzeczywistemu montażowi.' },
+                { key: 'prog_upadku', label: 'Próg upadku', min: 0, max: 5000, def: 1500,
+                  lo: 'czuły na upadek', hi: 'tylko gwałtowny upadek',
+                  desc: 'Jak gwałtowny musi być ruch przy podłodze, żeby uznać go za upadek. Niżej to czulsze wykrywanie, ale częstsze fałszywe alarmy przy szybkim schyleniu.' },
+                { key: 'max_temp_c', label: 'Próg pożaru [°C]', min: 0, max: 90, def: 20,
+                  lo: 'alarm już przy cieple', hi: 'alarm dopiero przy gorącu',
+                  desc: 'Powyżej tej temperatury czujnika uruchamia się alarm POŻAR. Ustaw kilka stopni nad normalną temperaturą pomieszczenia.' },
+                { key: 'zasiedzenie_s', label: 'Zasiedzenie [s]', min: 10, max: 3600, def: 300,
+                  lo: 'szybko sygnalizuje', hi: 'długo toleruje bezruch',
+                  desc: 'Po ilu sekundach bez ruchu obecnej osoby karta przechodzi w stan ZASIEDZENIE. To tylko sygnalizacja — nie uruchamia syreny.' },
+            ]},
+        ];
+        const CFG_PARAM = {};   // key -> definicja (spłaszczone)
+        for (const g of CFG_GROUPS) for (const p of g.params) CFG_PARAM[p.key] = { ...p, group: g.id };
+
+        let cfgSnapshot = { radar: {}, edge: {} };   // ostatni pokoj/<x>/cfg/state
+        let cfgRoom = null;
+        let cfgLastState = null;
+        let cfgFormBuilt = false;
+
+        function cfgTargetRoom() { return selectedRoom || cfgRoom || '101'; }
+
+        // Jedna wartość bazowa dla pola: to z urządzenia jeśli jest, inaczej default.
+        function cfgBaseline(key) {
+            const p = CFG_PARAM[key];
+            const dev = cfgSnapshot[p.group] ? cfgSnapshot[p.group][key] : undefined;
+            return dev !== undefined ? dev : p.def;
+        }
+
+        // --- Dymek opisu (jeden, przenoszony) ---
+        const cfgTip = document.createElement('div');
+        cfgTip.className = 'cfg-tip';
+        document.body.appendChild(cfgTip);
+        function showTip(labelEl, text) {
+            cfgTip.textContent = text;
+            const r = labelEl.getBoundingClientRect();
+            cfgTip.style.left = Math.max(12, Math.min(r.left, window.innerWidth - 332)) + 'px';
+            cfgTip.style.top = (r.bottom + 8) + 'px';
+            cfgTip.classList.add('show');
+        }
+        function hideTip() { cfgTip.classList.remove('show'); }
+
+        function buildCfgForm() {
+            if (cfgFormBuilt) return;
+            const host = document.getElementById('cfg-fields');
+            host.innerHTML = '';
+            for (const grp of CFG_GROUPS) {
+                const t = document.createElement('div');
+                t.className = 'cfg-group-title';
+                t.textContent = grp.title;
+                host.appendChild(t);
+                for (const p of grp.params) {
+                    const row = document.createElement('div');
+                    row.className = 'cfg-row';
+                    row.innerHTML =
+                        '<label id="cfg-l-' + p.key + '" for="cfg-' + p.key + '" tabindex="0">' + p.label + '</label>' +
+                        '<input type="range" id="cfg-r-' + p.key + '" min="' + p.min + '" max="' + p.max + '">' +
+                        '<input type="number" id="cfg-' + p.key + '" min="' + p.min + '" max="' + p.max + '">' +
+                        '<div class="cfg-ends"><span>' + p.lo + '</span><span>' + p.hi + '</span></div>';
+                    host.appendChild(row);
+
+                    const num = row.querySelector('#cfg-' + p.key);
+                    const rng = row.querySelector('#cfg-r-' + p.key);
+                    const lab = row.querySelector('#cfg-l-' + p.key);
+                    num.dataset.group = grp.id; num.dataset.key = p.key;
+                    num.value = p.def; rng.value = p.def;          // widoczna wartość od razu
+                    num.addEventListener('input', () => { rng.value = num.value; });
+                    rng.addEventListener('input', () => { num.value = rng.value; });
+                    lab.addEventListener('mouseenter', () => showTip(lab, p.desc));
+                    lab.addEventListener('mouseleave', hideTip);
+                    lab.addEventListener('focus', () => showTip(lab, p.desc));
+                    lab.addEventListener('blur', hideTip);
+                }
+            }
+            cfgFormBuilt = true;
+        }
+
+        // Ustawia pola na wartości bazowe (urządzenie jeśli jest, inaczej default).
+        function fillCfgForm() {
+            for (const key in CFG_PARAM) {
+                const v = cfgBaseline(key);
+                const num = document.getElementById('cfg-' + key);
+                const rng = document.getElementById('cfg-r-' + key);
+                if (num) num.value = v;
+                if (rng) rng.value = v;
+            }
+        }
+
+        function renderCfgStatus(s) {
+            const el = document.getElementById('cfg-status');
+            el.innerHTML = '';
+            const src = document.createElement('div');
+            src.className = 'cfg-src';
+            src.textContent = s
+                ? 'Wartości z urządzenia (pokój ' + cfgTargetRoom() + ').'
+                : 'Wartości domyślne — radar nie odpowiedział na pokoj/' + cfgTargetRoom() + '/cfg/state.';
+            el.appendChild(src);
+
+            if (s) {
+                const line = document.createElement('div');
+                let txt = 'stan: ' + (s.st || '?');
+                if (s.result) txt += '   wynik: ' + s.result;
+                if (s.clamped) txt += '   (docięto ' + s.clamped + ' pól)';
+                if (s.fw) txt += '\nfirmware modułu: ' + s.fw + '   det_status: ' + (s.det_status || '?') +
+                                 '   czas zapisu: ' + (s.apply_ms != null ? s.apply_ms + ' ms' : '?');
+                line.textContent = txt;
+                el.appendChild(line);
+                if (Array.isArray(s.warn) && s.warn.length) {
+                    const w = document.createElement('div');
+                    w.className = 'cfg-warn';
+                    w.textContent = '⚠ ' + s.warn.join('\n⚠ ');
+                    el.appendChild(w);
+                }
+            }
+        }
+
+        function handleCfgState(room, data) {
+            cfgRoom = room;
+            cfgLastState = data;
+            cfgSnapshot = { radar: data.radar || {}, edge: data.edge || {} };
+            document.getElementById('cfg-room-label').textContent = 'Pokój ' + room;
+            if (document.getElementById('cfg-overlay').classList.contains('open')) fillCfgForm();
+            renderCfgStatus(data);
+        }
+
+        function publishCfg(payloadObj) {
+            if (!client || !client.connected) { appendLog('ERROR', 'Brak połączenia z brokerem.'); return; }
+            const room = cfgTargetRoom();
+            client.publish('pokoj/' + room + '/cfg', JSON.stringify(payloadObj), { retain: true });
+            appendLog('SYSTEM', 'Konfiguracja → pokoj/' + room + '/cfg: ' + JSON.stringify(payloadObj));
+        }
+
+        document.getElementById('cfg-gear').addEventListener('click', () => {
+            buildCfgForm();
+            fillCfgForm();
+            document.getElementById('cfg-room-label').textContent = 'Pokój ' + cfgTargetRoom();
+            renderCfgStatus(cfgLastState);
+            document.getElementById('cfg-overlay').classList.add('open');
+        });
+        document.getElementById('cfg-close').addEventListener('click', () => {
+            hideTip();
+            document.getElementById('cfg-overlay').classList.remove('open');
+        });
+        document.getElementById('cfg-overlay').addEventListener('click', e => {
+            if (e.target.id === 'cfg-overlay') { hideTip(); e.currentTarget.classList.remove('open'); }
+        });
+        document.getElementById('cfg-reset').addEventListener('click', () => publishCfg({ preset: 'care' }));
+        document.getElementById('cfg-apply').addEventListener('click', () => {
+            const out = { radar: {}, edge: {} };
+            let n = 0;
+            document.querySelectorAll('#cfg-fields input[type=number]').forEach(num => {
+                const grp = num.dataset.group, key = num.dataset.key;
+                const v = parseInt(num.value, 10);
+                if (Number.isNaN(v)) return;
+                if (v !== cfgBaseline(key)) { out[grp][key] = v; n++; }
+            });
+            if (!n) { appendLog('SYSTEM', 'Konfiguracja: brak zmian do wysłania.'); return; }
+            if (!Object.keys(out.radar).length) delete out.radar;
+            if (!Object.keys(out.edge).length) delete out.edge;
+            publishCfg(out);
         });
     </script>
 </body>

@@ -1,5 +1,6 @@
 #include "status_led.h"
 #include "wifi_mqtt.h"   // softap_mode, wifi_ready, mqtt_connected, mqtt_ever_connected, alarm_armed
+#include "board_pins.h"  // PIN_RGB, PIN_LED
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -9,10 +10,10 @@
 
 static const char *TAG = "STATUS_LED";
 
-#define LED_GPIO     8       // wbudowany WS2812 na DevKitC-1
-#define PCB_LED_GPIO 18      // dioda alarmowa na PCB — miga w zgodzie z RGB
-#define TICK_MS      50      // okres pętli sygnalizacji
-#define DIM          40      // bazowa jasność (na 255 dioda oślepia)
+#define LED_GPIO     PIN_RGB   // wbudowany WS2812 na DevKitC-1
+#define PCB_LED_GPIO PIN_LED   // dioda alarmowa na PCB — miga w zgodzie z RGB
+#define TICK_MS      50        // okres pętli sygnalizacji
+#define DIM          40        // bazowa jasność (na 255 dioda oślepia)
 
 static led_strip_handle_t s_strip = NULL;
 

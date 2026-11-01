@@ -3,6 +3,8 @@ idf_component_register(
         "main.c"
         "wifi_mqtt.c"
         "radar.c"
+        "radar_cfg.c"
+        "edge_cfg.c"
         "captive_portal.c"
         "dns_server.c"
         "status_led.c"
@@ -18,4 +20,6 @@ idf_component_register(
         nvs_flash
 	esp_http_server
         lwip
+        esp_timer
+        esp_rom
 )

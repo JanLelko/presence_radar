@@ -1,5 +1,6 @@
 #include "wifi_mqtt.h"
 #include "captive_portal.h"
+#include "radar_cfg.h"   // cfg_json_u32() — parsowanie {"armed":...}
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -14,11 +15,15 @@ static const char *TAG = "WIFI_MQTT";
 /* Definicja zmiennej globalnej zadeklarowanej w wifi_mqtt.h */
 esp_mqtt_client_handle_t mqtt_client = NULL;
 
+/* Kolejka komend panel -> pętla radaru. Tworzona w app_main przed setup_mqtt(). */
+QueueHandle_t mqtt_cmd_queue = NULL;
+
 // FLAGA ssid, password
 volatile bool wifi_ready = false;
 
-// Flaga uzbrojenia alarmu — sterowana z panelu przez retained-temat
-// MQTT_CMD_TOPIC. Czytana przez pętlę alarmu w main.c.
+// Flaga uzbrojenia alarmu. Ustawiana w handlerze MQTT (temat MQTT_CMD_TOPIC)
+// oraz przez button_task; czytana przez pętlę alarmu w main.c. Podwójny writer
+// volatile bajtu jest benign (stan pre-existing).
 volatile bool alarm_armed = false;
 
 // Flagi stanu dla sygnalizacji RGB (status_led.c).
@@ -35,10 +40,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT połączony — subskrybuję %s", MQTT_CMD_TOPIC);
+        ESP_LOGI(TAG, "MQTT połączony — subskrybuję %s oraz %s",
+                 MQTT_CMD_TOPIC, MQTT_CFG_TOPIC);
         mqtt_connected = true;
         mqtt_ever_connected = true;
         esp_mqtt_client_subscribe(event->client, MQTT_CMD_TOPIC, 1);
+        esp_mqtt_client_subscribe(event->client, MQTT_CFG_TOPIC, 1);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
@@ -46,16 +53,67 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         break;
 
     case MQTT_EVENT_DATA: {
-        // Prosty parser bez biblioteki JSON: kopiujemy payload do lokalnego,
-        // null-terminowanego bufora i sprawdzamy obecność "true". Payload
-        // z brokera nie jest null-terminowany, więc nie wolno go strstr-ować.
-        char buf[64] = {0};
-        int n = event->data_len < (int)sizeof(buf) - 1
-                    ? event->data_len : (int)sizeof(buf) - 1;
-        memcpy(buf, event->data, n);
-        alarm_armed = (strstr(buf, "true") != NULL);
-        ESP_LOGI(TAG, "Polecenie z panelu: alarm %s",
-                 alarm_armed ? "UZBROJONY" : "rozbrojony");
+        // event->topic jest ważny tylko na 1. fragmencie; fragmentowanych nie
+        // obsługujemy (payload cfg trzymamy < 1 KB, cmd jest malutki).
+        if (event->total_data_len != event->data_len) {
+            ESP_LOGW(TAG, "MQTT: pominięto fragmentowany payload (%d/%d B)",
+                     event->data_len, event->total_data_len);
+            break;
+        }
+
+        // Topic z brokera nie jest null-terminowany — porównujemy po długości.
+        const bool is_cmd = (event->topic_len == (int)strlen(MQTT_CMD_TOPIC) &&
+                             memcmp(event->topic, MQTT_CMD_TOPIC, event->topic_len) == 0);
+        const bool is_cfg = (event->topic_len == (int)strlen(MQTT_CFG_TOPIC) &&
+                             memcmp(event->topic, MQTT_CFG_TOPIC, event->topic_len) == 0);
+
+        if (is_cmd) {
+            // {"armed":true|false} — parsujemy TU (natychmiast, nie przez kolejkę
+            // cfg, żeby seria zmian configu nie opóźniła rozbrojenia alarmu).
+            // cfg_json_u32 celuje w pole "armed" -> koniec z false-positive
+            // strstr(buf,"true") na {"armed":false,"note":"true story"}.
+            char buf[96] = {0};
+            int n = event->data_len < (int)sizeof(buf) - 1
+                        ? event->data_len : (int)sizeof(buf) - 1;
+            memcpy(buf, event->data, n);
+            uint32_t v;
+            if (cfg_json_u32(buf, "armed", &v)) {
+                alarm_armed = (v != 0);
+                ESP_LOGI(TAG, "cmd: alarm %s.", alarm_armed ? "UZBROJONY" : "rozbrojony");
+            } else {
+                ESP_LOGW(TAG, "cmd: brak pola \"armed\" w: %.80s", buf);
+            }
+            break;
+        }
+        if (!is_cfg) {
+            ESP_LOGD(TAG, "MQTT DATA z nieobsługiwanego tematu (topic_len=%d)",
+                     event->topic_len);
+            break;
+        }
+        if (mqtt_cmd_queue == NULL) {
+            ESP_LOGW(TAG, "cfg: kolejka jeszcze nie gotowa — pomijam.");
+            break;
+        }
+        // Za duży payload: odrzuć (NIE obcinaj po cichu — obcięty JSON parsuje
+        // się częściowo i aplikuje bez błędu).
+        if (event->data_len >= (int)sizeof(((mqtt_msg_t *)0)->payload)) {
+            ESP_LOGW(TAG, "cfg: payload %d B >= bufor — odrzucony.", event->data_len);
+            break;
+        }
+
+        // Handler jednowątkowy per klient -> static zamiast ~1 KB na stosie.
+        // Publikacji z tego tasku NIE robimy (kontencja o mutex klienta MQTT
+        // = udokumentowany deadlock) — acki wysyła pętla radaru.
+        static mqtt_msg_t m;
+        int tl = event->topic_len < (int)sizeof(m.topic) - 1
+                     ? event->topic_len : (int)sizeof(m.topic) - 1;
+        memcpy(m.topic, event->topic, tl);
+        m.topic[tl] = '\0';
+        memcpy(m.payload, event->data, event->data_len);
+        m.payload[event->data_len] = '\0';
+        if (xQueueSend(mqtt_cmd_queue, &m, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "cfg: kolejka pełna — komunikat odrzucony.");
+        }
         break;
     }
 
@@ -238,9 +296,19 @@ void setup_mqtt(void)
 
     ESP_LOGI(TAG, "Uruchamiam klienta MQTT. Docelowy adres: %s", saved_mqtt_uri);
 
-    // 3. Konfigurujemy klienta znalezionym (lub awaryjnym) adresem
+    // 3. Konfigurujemy klienta znalezionym (lub awaryjnym) adresem.
+    //    LWT na osobny temat (NIE cfg/state — inaczej offline nadpisałby
+    //    retained snapshot configu, z którego wypełnia się panel). Pola
+    //    last_will MUSZĄ być ustawione przed esp_mqtt_client_init().
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = saved_mqtt_uri,
+        .session.last_will = {
+            .topic   = MQTT_STATUS_TOPIC,
+            .msg     = "{\"st\":\"offline\"}",
+            .msg_len = 0,      // 0 => strlen(msg)
+            .qos     = 1,
+            .retain  = true,
+        },
     };
 
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
