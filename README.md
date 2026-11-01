@@ -121,7 +121,7 @@ python -m acconeer.exptool.app
 ```
 
 1. Tryb bootloadera: przytrzymaj `BOOT`, naciśnij `RST`, puść `BOOT`.
-2. Zakładka **Flash**, wybierz port (`/dev/ttyACM0`), wgraj `i2c_presence_detector`.
+2. Zakładka **Flash**, wybierz port (`/dev/ttyACM0`), wgraj [`firmware/xm125/i2c_presence_detector.bin`](firmware/xm125/i2c_presence_detector.bin).
 
 ## Protokół I2C
 
@@ -181,6 +181,7 @@ main/
   board_pins.h      definicje pinów
 dashboard/          panel (index.html)
 docs/               dokumentacja i raport końcowy
+firmware/xm125/     gotowy firmware STM32 radaru (.bin)
 hardware/           projekt KiCad
 examples/           narzędzia pomocnicze (poza buildem)
 mosquitto.conf      porty 1883 i 9001
