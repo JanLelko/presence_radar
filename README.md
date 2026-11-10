@@ -7,11 +7,6 @@
 Radarowy czujnik obecności, upadków i zasiedzenia.
 ESP32-C6 + Acconeer XM125 (A121), MQTT, panel w przeglądarce.
 
-<!-- Plik: docs/img/main.png -->
-
-
-<img src="docs/img/main.png" alt="Presence Radar" width="90%">
-
 </div>
 
 ---
@@ -28,12 +23,10 @@ Dashboard w przeglądarce (MQTT over WebSockets) wyświetla stan pokoi na żywo.
 
 <div align="center">
 
-<!-- Plik: docs/img/panel.png -->
 <img src="docs/img/panel.png" alt="Panel" width="100%">
 
 <sub>Panel (dashboard)</sub>
 
-<!-- Plik: docs/img/urzadzenie.jpg -->
 <img src="docs/img/urzadzenie.jpg" alt="Urządzenie" width="60%">
 
 <sub>Urządzenie</sub>
@@ -206,3 +199,8 @@ Plany i ograniczenia: [`TODO.md`](TODO.md).
 - [Acconeer Exploration Tool](https://docs.acconeer.com/en/latest/exploration_tool/index.html)
 - [ESP32-C6-WROOM-1 datasheet](https://documentation.espressif.com/esp32-c6-wroom-1_wroom-1u_datasheet_en.html)
 - [ESP-IDF I2C API](https://docs.espressif.com/projects/esp-idf/en/stable/api-reference/peripherals/i2c.html)
+
+## Licencja
+
+Kod źródłowy: [MIT](LICENSE). Plik `firmware/xm125/i2c_presence_detector.bin` jest dziełem Acconeer
+i podlega licencji z [`firmware/xm125/LICENSE-Acconeer.txt`](firmware/xm125/LICENSE-Acconeer.txt).
