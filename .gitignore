@@ -1,12 +1,23 @@
-.cache/
-CLAUDE.md
-GEMINI.md
+# Build
 build/
 managed_components/
 dependencies.lock
+.cache/
+
+# ESP-IDF generated config (shared defaults live in sdkconfig.defaults)
+sdkconfig
 sdkconfig.old
 
-# KiCad — artefakty (autosave, backupy, cache, locki, ustawienia lokalne)
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local assistant notes
+CLAUDE.md
+GEMINI.md
+
+# KiCad: autosaves, backups, caches, locks, local settings
 *-backups/
 _autosave-*
 ~*.lck
@@ -17,5 +28,6 @@ _autosave-*
 fp-info-cache
 *.kicad_prl
 
-# Prywatne — nie wersjonować
+# Private / local-only documents
 docs/prezentacja_biznesowa.md
+docs/*.zip
