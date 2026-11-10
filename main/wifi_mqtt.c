@@ -18,7 +18,7 @@ esp_mqtt_client_handle_t mqtt_client = NULL;
 /* Kolejka komend panel -> pętla radaru. Tworzona w app_main przed setup_mqtt(). */
 QueueHandle_t mqtt_cmd_queue = NULL;
 
-// FLAGA ssid, password
+// Ustawiane po uzyskaniu adresu IP w trybie STA.
 volatile bool wifi_ready = false;
 
 // Flaga uzbrojenia alarmu. Ustawiana w handlerze MQTT (temat MQTT_CMD_TOPIC)
@@ -291,7 +291,7 @@ void setup_mqtt(void)
     // 2. Zabezpieczenie inżynierskie: co jeśli NVS jest puste (ktoś nie wpisał adresu)?
     if (strlen(saved_mqtt_uri) == 0) {
         ESP_LOGW(TAG, "Brak MQTT URI w pamięci! Używam domyślnego awaryjnego...");
-        strcpy(saved_mqtt_uri, "mqtt://10.42.0.1:1883"); // Twój awaryjny adres
+        strcpy(saved_mqtt_uri, "mqtt://10.42.0.1:1883"); // domyślny adres brokera (hotspot laptopa)
     }
 
     ESP_LOGI(TAG, "Uruchamiam klienta MQTT. Docelowy adres: %s", saved_mqtt_uri);
